@@ -1,195 +1,53 @@
-# SMLMData
+# SMLMio
 
-Data types and utilities for Single Molecule Localization Microscopy (SMLM) in Julia.
+SMLMio reads and writes the lab's file formats for single-molecule localization microscopy (SMLM)
+data. It provides SMITE `.mat` file I/O using SMLMCore's emitters and cameras.
 
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaSMLM.github.io/SMLMData.jl/stable)
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaSMLM.github.io/SMLMData.jl/dev)
-[![Build Status](https://github.com/JuliaSMLM/SMLMData.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMData.jl/actions/workflows/CI.yml)
-[![Coverage](https://codecov.io/gh/JuliaSMLM/SMLMData.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/JuliaSMLM/SMLMData.jl)
+[![CI](https://github.com/JuliaSMLM/SMLMio.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMio.jl/actions/workflows/CI.yml)
+[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaSMLM.github.io/SMLMio.jl/dev/)
 
-## Ecosystem Role
-
-SMLMData is the **core types package** for the [JuliaSMLM](https://github.com/JuliaSMLM) ecosystem. It defines the foundational types (emitters, cameras, SMLD containers) that all other packages share.
-
-**You rarely need to import SMLMData directly.** Packages like `GaussMLE`, `SMLMBoxer`, and `SMLMAnalysis` depend on SMLMData and re-export the types you need. For example:
-
-```julia
-using GaussMLE  # Re-exports ROIBatch, camera types, etc.
-using SMLMAnalysis  # Re-exports all SMLMData types for analysis workflows
-```
-
-Direct `using SMLMData` is primarily for:
-- Package developers building on the ecosystem
-- Standalone data manipulation without analysis packages
-- Learning the type system
-
-## Quick Start
-
-```julia
-using SMLMData
-
-# Create a camera with 100nm pixels
-cam = IdealCamera(512, 512, 0.1)
-
-# Or an sCMOS camera with per-pixel noise characteristics
-cam_scmos = SCMOSCamera(512, 512, 0.1, 1.6)  # 1.6 e⁻ rms readnoise
-
-# Create emitters
-emitters = [
-    Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0),
-    Emitter2DFit{Float64}(3.0, 4.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0)
-]
-
-# Create SMLD container
-smld = BasicSMLD(emitters, cam, 1, 1, Dict{String,Any}())
-
-# Filter by photons
-bright = @filter(smld, photons > 1000)
-
-# Select region of interest
-roi = filter_roi(smld, 0.0:2.0, 1.0:3.0)
-```
-
-## Overview
-
-SMLMData provides a unified framework for handling Single Molecule Localization Microscopy data in Julia. The package enables efficient data manipulation, filtering, and analysis through a well-defined type system that handles both 2D and 3D localizations.
-
-### Key Features
-
-- **Type system** for emitters, cameras, and datasets
-- **Physical coordinate handling** with camera pixel mappings
-- **Filtering tools** for property-based and spatial selection
-- **Dataset operations** for merging and concatenation
-- **SMITE format** compatibility for MATLAB interoperability
-- **Extensible design** for custom emitter types
-
-## Type Hierarchy
-
-```
-AbstractCamera
- ├─ IdealCamera{T}
- └─ SCMOSCamera{T}
-
-AbstractEmitter
- ├─ Emitter2D{T}
- ├─ Emitter3D{T}
- ├─ Emitter2DFit{T}
- └─ Emitter3DFit{T}
-
-ROI Batch Types
- ├─ SingleROI{T}
- └─ ROIBatch{T,N,A,C}
-
-AbstractSMLD
- ├─ BasicSMLD{T,E}
- └─ SmiteSMLD{T,E}
- 
-```
-
-## Common Workflows
-
-### Loading External Data
-
-```julia
-# Load from SMITE format (MATLAB)
-smd = SmiteSMD("path/to/data", "localizations.mat")
-smld_2d = load_smite_2d(smd)
-```
-
-### Filtering and Analysis
-
-```julia
-# Filter by multiple properties
-good_fits = @filter(smld, σ_x < 0.02 && σ_y < 0.02 && photons > 500)
-
-# Select spatial region
-region = filter_roi(smld, 5.0:15.0, 10.0:20.0)
-
-# Analyze frames
-first_10_frames = filter_frames(smld, 1:10)
-```
-
-### Combining Datasets
-
-```julia
-# Merge datasets with sequential frame numbering
-merged = merge_smld([smld1, smld2], adjust_frames=true)
-```
-
-## Coordinate Conventions
-
-- All spatial coordinates are in **microns**
-- Physical space: (0,0) at top-left corner of camera
-- Pixel space: (1,1) at center of top-left pixel
-- Conversion functions: `pixel_to_physical`, `physical_to_pixel`
-
-## Design Details
-
-SMLMData is built around three core abstract types that work together:
-
-- **AbstractSMLD**: Container type holding a vector of emitters and camera information
-- **AbstractEmitter**: Base type for individual localizations
-- **AbstractCamera**: Camera geometry and pixel coordinate handling
-
-Any concrete AbstractSMLD type must contain:
-```julia
-emitters::Vector{<:AbstractEmitter}  # Vector of localizations
-camera::AbstractCamera               # Camera information
-```
-
-The package provides concrete implementations for different use cases:
-
-```julia
-# Basic emitter with just position and photons
-struct Emitter2D{T} <: AbstractEmitter
-    x::T           # microns
-    y::T           # microns
-    photons::T
-end
-
-# Ideal camera defined by its pixel edges (Poisson noise only)
-struct IdealCamera{T} <: AbstractCamera
-    pixel_edges_x::Vector{T}  # microns
-    pixel_edges_y::Vector{T}  # microns
-end
-
-# sCMOS camera with pixel-dependent calibration parameters
-struct SCMOSCamera{T} <: AbstractCamera
-    pixel_edges_x::Vector{T}      # microns
-    pixel_edges_y::Vector{T}      # microns
-    offset::Union{T, Matrix{T}}   # ADU (dark level)
-    gain::Union{T, Matrix{T}}     # e⁻/ADU (conversion gain)
-    readnoise::Union{T, Matrix{T}}  # e⁻ rms (readout noise)
-    qe::Union{T, Matrix{T}}       # dimensionless 0-1 (quantum efficiency)
-end
-
-# Basic SMLD implementation
-struct BasicSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
-    emitters::Vector{E}
-    camera::AbstractCamera
-    n_frames::Int
-    n_datasets::Int
-    metadata::Dict{String,Any}
-end
-```
-
-## Extending
-
-To create your own SMLD type:
-
-1. Define your emitter type inheriting from `AbstractEmitter`
-2. Define your SMLD type containing a vector of your emitters
-3. All core operations (filtering, merging) will work automatically as long as:
-   - Your emitter type has the fields being filtered on
-   - Your SMLD type contains the standard fields (emitters, camera)
+Status: SMLMio 0.1 holds SMLMData 0.7.1's SMITE code unchanged. A November 2026 review found that the SMITE loaders fail on files written by current SMITE; those fixes are the next release's work.
 
 ## Installation
 
+SMLMio and SMLMCore are not registered yet. Install both from GitHub, SMLMCore first:
+
 ```julia
 using Pkg
-Pkg.add("SMLMData")
+Pkg.add(url="https://github.com/JuliaSMLM/SMLMCore.jl")
+Pkg.add(url="https://github.com/JuliaSMLM/SMLMio.jl")
 ```
+
+## Quick start
+
+Save a small dataset to a temporary folder. Positions and their uncertainties are in microns.
+
+```julia
+using SMLMio
+using SMLMCore: IdealCamera, Emitter2DFit
+
+camera = IdealCamera(1:64, 1:64, 0.1) # pixel size in microns
+emitters = [Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)]
+smld = SmiteSMLD{Float64,Emitter2DFit{Float64}}(
+    emitters, camera, 1, 1, Dict{String,Any}(),
+)
+mktempdir() do dir
+    save_smite(smld, dir, "localizations.mat")
+    println(isfile(joinpath(dir, "localizations.mat")))
+end
+```
+
+## Where it fits
+
+SMLMio takes and returns SMLMCore's types. SMLMData loads and re-exports SMLMCore and SMLMio,
+so existing `using SMLMData` code is unchanged by the split (SMLMData 0.7.2 and later).
 
 ## Documentation
 
-For detailed usage instructions, tutorials, and API reference, please visit the [official documentation](https://juliasmlm.github.io/SMLMData.jl/stable).
+See the [documentation](https://JuliaSMLM.github.io/SMLMio.jl/dev/) for
+[SMITE files](https://JuliaSMLM.github.io/SMLMio.jl/dev/smite/) and the
+[API](https://JuliaSMLM.github.io/SMLMio.jl/dev/api/).
+
+## License
+
+[MIT](LICENSE).

@@ -1,143 +1,36 @@
 """
-    SMLMData
+    SMLMio
 
-A Julia package for working with Single Molecule Localization Microscopy (SMLM) data.
+File reading and writing for single-molecule localization microscopy (SMLM) data.
 
-# Features
-- Type system for emitters, cameras, and localization data
-- Physical coordinate handling (microns) with camera pixel mappings
-- Filtering and ROI selection tools
-- SMITE format compatibility
-- Memory-efficient data structures
+SMLMio holds the file formats; the data types it reads into and writes from (emitters, cameras,
+`BasicSMLD`) live in SMLMCore. Positions are in microns, as in SMLMCore.
 
-# Basic Usage
+# Formats
+- SMITE, the lab's MATLAB package: `SmiteSMD` names a `.mat` file, `load_smite_2d` and
+  `load_smite_3d` read it into a `SmiteSMLD`, and `save_smite` writes one back.
+
+# Example
 ```julia
-using SMLMData
+using SMLMio
 
-# Create a camera
-cam = IdealCamera(1:512, 1:512, 0.1)  # 512x512 camera with 0.1 micron pixels
-
-# Create some emitters
-emitters = [
-    Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0),
-    Emitter2DFit{Float64}(3.0, 4.0, 1200.0, 12.0, 0.01, 0.01, 60.0, 2.0)
-]
-
-# Create SMLD object
-smld = BasicSMLD(emitters, cam, 1, 1, Dict{String,Any}())
-
-# Filter operations
-roi = filter_roi(smld, 0.0:2.0, 1.0:3.0)
-bright = @filter(smld, photons > 1000)
-```
-
-# API Overview
-For a comprehensive overview of the API, use the help mode on `api`:
-
-```julia
-?api
-```
-
-Or access the complete API documentation programmatically:
-
-```julia
-docs = SMLMData.api()
+smd = SmiteSMD("path/to/data", "localizations.mat")
+smld = load_smite_2d(smd)
+save_smite(smld, "path/to/output", "copy.mat")
 ```
 """
-module SMLMData
+module SMLMio
 
-# External Packages
-using MAT
+using MAT: matopen, matwrite
+using SMLMCore: AbstractCamera, AbstractEmitter, AbstractSMLD, Emitter2DFit, Emitter3DFit,
+    IdealCamera, emitter_ndims
+# Internal helpers SMLMCore uses for its own show methods; SmiteSMLD's show reuses them.
+using SMLMCore: _dim_label, format_with_commas
 
-# Base imports
-import Base: filter
+export SmiteSMD, SmiteSMLD, load_smite_2d, load_smite_3d, save_smite
 
-# Type definitions
-export
-    # Abstract types
-    AbstractEmitter,
-    AbstractCamera,
-    AbstractSMLD,
-    SMLD,  # Deprecated alias for AbstractSMLD
-
-    # Ecosystem abstract types (tuple pattern)
-    AbstractSMLMConfig,
-    AbstractSMLMInfo,
-
-    # Concrete emitter types
-    Emitter2D,
-    Emitter3D,
-    Emitter2DFit,
-    Emitter3DFit,
-
-    # Camera types
-    IdealCamera,
-    SCMOSCamera,
-
-    # ROI batch types
-    SingleROI,
-    ROIBatch,
-
-    # SMLD types
-    BasicSMLD,
-    SmiteSMLD,
-    SmiteSMD
-
-# Coordinates and conversions
-export 
-    pixel_to_physical,
-    physical_to_pixel,
-    physical_to_pixel_index,
-    compute_bin_edges,
-    get_pixel_centers
-
-# Filtering and operations
-export
-    @filter,
-    filter_frames,
-    filter_roi,
-    emitter_ndims,
-    cat_smld,
-    merge_smld
-
-# SMITE functionality
-export
-    load_smite_2d,
-    load_smite_3d,
-    save_smite
-
-# Ecosystem abstract types for the (Config, Info, Data) tuple pattern
-"""
-    AbstractSMLMConfig
-
-Abstract supertype for configuration structs in the JuliaSMLM ecosystem.
-Subtypes hold algorithm parameters (e.g., fit settings, simulation parameters).
-"""
-abstract type AbstractSMLMConfig end
-
-"""
-    AbstractSMLMInfo
-
-Abstract supertype for information/results structs in the JuliaSMLM ecosystem.
-Subtypes hold computed metadata or diagnostic output from algorithms.
-"""
-abstract type AbstractSMLMInfo end
-
-# Include all source files
-include("types/emitters.jl")  # Move from current location
-include("types/cameras.jl")   # Move from current location
-include("types/roi_batch.jl") # ROI batch types for ecosystem interop
-include("types/smld.jl")      # Move from current location
-
-include("core/coordinates.jl") # Move from coordinates.jl
-include("core/filters.jl")    # Move from filters.jl
-include("core/operations.jl") # Move from operations.jl
-
-include("io/smite/types.jl")   # Move from smite/types.jl
-include("io/smite/loading.jl") # Move from smite/loading.jl
-include("io/smite/saving.jl")  # Move from smite/saving.jl
-
-# Include the API overview functionality
-include("api.jl")
+include("smite/types.jl")
+include("smite/loading.jl")
+include("smite/saving.jl")
 
 end

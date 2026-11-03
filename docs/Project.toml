@@ -1,3 +1,11 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-SMLMData = "5488f106-40b8-4660-84c5-84a168990d1b"
+SMLMio = "b22eae6f-8030-48c8-88e1-31d49f7b605c"
+SMLMCore = "240e48d6-ab50-4b9c-b28c-b5763f96a46b"
+
+[sources]
+SMLMio = {path = ".."}
+SMLMCore = {path = "../../SMLMCore"}
+
+[compat]
+Documenter = "1"

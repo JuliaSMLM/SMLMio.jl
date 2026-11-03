@@ -1,16 +1,12 @@
-# File I/O
+# SMITE files
 
-SMLMData provides functionality for importing and exporting localization data in various formats. This page documents the currently supported formats and related functions.
+SMITE is a MATLAB-based format commonly used in single molecule localization microscopy. SMLMio provides types and functions for interfacing with this format.
 
-## SMITE Format
-
-SMITE is a MATLAB-based format commonly used in single molecule localization microscopy. SMLMData provides types and functions for interfacing with this format.
-
-### Types
+## Types
 
 ```julia
 # Helper type for loading SMITE .mat files
-struct SmiteSMD 
+struct SmiteSMD
     filepath::String    # Path to the directory containing the .mat file
     filename::String    # Name of the .mat file
     varname::String     # Variable name in the .mat file (default: "SMD")
@@ -29,11 +25,13 @@ struct SmiteSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
 end
 ```
 
-### Loading SMITE Data
+## Loading SMITE Data
 
-SMLMData provides separate functions for loading 2D and 3D data from SMITE format:
+SMLMio provides separate functions for loading 2D and 3D data from SMITE format:
 
 ```julia
+using SMLMio
+
 # Load 2D data
 smd = SmiteSMD("path/to/data", "localizations.mat")
 smld_2d = load_smite_2d(smd)
@@ -43,6 +41,7 @@ smld_3d = load_smite_3d(smd)
 ```
 
 Both functions handle:
+
 - Conversion of coordinates to microns
 - Creation of appropriate camera model
 - Preservation of metadata
@@ -50,6 +49,8 @@ Both functions handle:
 Example:
 
 ```julia
+using SMLMio
+
 # Load SMITE data
 smd = SmiteSMD("/data/microscopy", "cell1_localizations.mat")
 smld = load_smite_2d(smd)
@@ -60,9 +61,9 @@ println("Image size: $(smld.metadata["data_size"])")
 println("Pixel size: $(smld.metadata["pixel_size"]) μm")
 ```
 
-### Saving SMITE Data
+## Saving SMITE Data
 
-You can save any SMLD object back to SMITE format:
+Save a SmiteSMLD object back to SMITE format:
 
 ```julia
 # Save to SMITE format
@@ -70,13 +71,18 @@ save_smite(smld, "output/directory", "processed_results.mat")
 ```
 
 The `save_smite` function:
-- Converts SMLMData structures to SMITE's structure
-- Preserves all metadata fields
+
+- Converts SmiteSMLD data to SMITE's structure
+- Preserves metadata fields whose names are not emitter columns
 - Saves in MATLAB v7.3 format
 
 Example workflow:
 
 ```julia
+using SMLMio
+using SMLMCore: @filter, filter_roi
+using Dates
+
 # Load data
 smd = SmiteSMD("raw_data", "experiment1.mat")
 smld = load_smite_2d(smd)
@@ -92,14 +98,3 @@ roi.metadata["selection_criteria"] = "photons > 1000, ROI (10-20,10-20)"
 # Save processed data
 save_smite(roi, "processed_data", "experiment1_processed.mat")
 ```
-
-## Future File Formats
-
-SMLMData is designed to be extended with additional file formats. Future versions may include support for:
-
-- CSV formats
-- HDF5
-- ThunderSTORM
-- Picasso
-
-When new formats are added, they will be documented in this section.
