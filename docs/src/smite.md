@@ -52,15 +52,17 @@ smld3 = load_smite_3d(smd)     # Emitter3DFit{Float64}, needs Z and Z_SE
 smld.metadata["pixel_size"]    # microns per pixel, from the file's PixelSize
 smld.metadata["data_size"]     # [YSize, XSize]
 smld.metadata["DriftX"]        # every other SMD field, as SMITE wrote it (drift in pixels)
-smld.metadata["PValue"]        # one value per row of the file; emitter e is row e.id
+smld.metadata["PValue"]        # if listed (below): one value per file row; emitter e is row e.id
 ```
 
 Each emitter's `id` is its row in the file. The fields SMITE stacks per localization (its
 catSMD list: `PValue`, `LogLikelihood`, `PSFSigma`, `ThreshFlag`, `XBoxCorner`, ...) that the
 file holds with one value per row are listed in `metadata["smite_per_localization_fields"]`;
-index them by `id`, for example `smld.metadata["PValue"][e.id]`. `metadata["smite_row_frames"]`
-and `metadata["smite_row_photons"]` record each row's frame and photons. Some older SMITE files hold such a field with one value
-per dataset; in a file with as many localizations as datasets that cannot be told apart.
+index them by `id`, for example `smld.metadata["PValue"][e.id]`.
+`metadata["smite_row_frames"]` and `metadata["smite_row_photons"]` record each row's frame and
+photons. To edit or replace a listed field, keep one value per file row, in file-row order:
+`save_smite` writes it by row. Some older SMITE files hold such a field with one value per
+dataset; in a file with as many localizations as datasets that cannot be told apart.
 
 What the loaders do with fields SMITE leaves empty or writes in another shape:
 
@@ -105,10 +107,11 @@ save_smite(smld, "output/directory", "processed_Results.mat")
   localizations (frame connection's combined output), emitters joined from another file, or
   changed frames or photons, they are dropped with a warning. A field replaced since loading
   that no longer has one value per file row is dropped with a warning too.
-- a field SMITE stacks per localization that the loaded file held with one value per dataset
-  (`PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files) as the file had it, unless the
-  saved localizations are as many as its values: then a load would take it for one value per
-  localization, and it is dropped with a warning.
+- a field SMITE stacks per localization that does not hold one value per row of the loaded file
+  (often one value per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files;
+  or one added after loading) as it is, unless the saved localizations are as many as its
+  values: then a load would take it for one value per localization, and it is dropped with a
+  warning.
 - An optional field the file left empty, and nobody has set since loading, back empty (an
   empty `ConnectID` stays empty). A `Photons_SE` or `Bg_SE` the file held with one value per
   dataset is saved as the `NaN` it loaded as; its per-dataset values are not saved.

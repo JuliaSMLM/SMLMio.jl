@@ -31,6 +31,13 @@ end
 write_smd(dir, name, s) = (matwrite(joinpath(dir, name), Dict("SMD" => s)); SmiteSMD(dir, name))
 
 # An emitter type whose id is a string, for the save's row check.
+# An emitter type with no id at all.
+struct NoId <: SMLMCore.AbstractEmitter
+    x::Float64; y::Float64; photons::Float64; bg::Float64; σ_x::Float64; σ_y::Float64
+    σ_photons::Float64; σ_bg::Float64; frame::Int; dataset::Int; track_id::Int
+end
+NoId(e) = NoId(e.x, e.y, e.photons, e.bg, e.σ_x, e.σ_y, e.σ_photons, e.σ_bg, e.frame, e.dataset, e.track_id)
+
 struct StrId <: SMLMCore.AbstractEmitter
     x::Float64; y::Float64; photons::Float64; bg::Float64; σ_x::Float64; σ_y::Float64
     σ_photons::Float64; σ_bg::Float64; frame::Int; dataset::Int; track_id::Int; id::String
@@ -168,6 +175,8 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
 
     @testset "a file without the variable" begin
         mktempdir() do dir
+            matwrite(joinpath(dir, "array.mat"), Dict("SMD" => [1.0, 2.0]))
+            @test_throws r"SMD is not a structure" load_smite_2d(SmiteSMD(dir, "array.mat"))
             matwrite(joinpath(dir, "other.mat"), Dict("SMR" => Dict("X" => [1.0])))
             @test_throws r"other.mat has no variable SMD" load_smite_2d(SmiteSMD(dir, "other.mat"))
             # The file was closed: it can be written again in the same session.
@@ -416,6 +425,9 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             # An emitter type whose id is not an integer cannot name a row.
             out = notsaved(BasicSMLD([StrId(e) for e in a.emitters], a.camera, a.n_frames, a.n_datasets, copy(md)), "strid.mat")
             @test length(vec(out["X"])) == 6
+            # Nor can one with no id.
+            out = notsaved(BasicSMLD([NoId(e) for e in a.emitters], a.camera, a.n_frames, a.n_datasets, copy(md)), "noid.mat")
+            @test length(vec(out["X"])) == 6
             # A field replaced since loading, no longer one value per file row, is dropped alone,
             # with that reason; the other fields still follow their rows.
             kept = SMLMCore.@filter(a, frame >= 5)
@@ -447,6 +459,10 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             out = matread(joinpath(dir, "listkept.mat"))["SMD"]
             @test vec(out["PSFSigma"]) == Float32[1.3, 1.4]
             @test vec(out["DriftX"]) == Float32[0.1, 0.2, 0.3, 0.4]
+            # All four saved: DriftX has as many values as localizations but is not a field SMITE
+            # stacks per localization, so it is written, with no warning.
+            @test_logs save_smite(a, dir, "listall.mat")
+            @test vec(matread(joinpath(dir, "listall.mat"))["SMD"]["DriftX"]) == Float32[0.1, 0.2, 0.3, 0.4]
             # A single localization: SMITE's per-localization fields are scalars; nothing else is.
             one = load_smite_2d(write_smd(dir, "one.mat", smite_smd(1)))
             @test sort(one.metadata["smite_per_localization_fields"]) == ["PValue", "ThreshFlag"]

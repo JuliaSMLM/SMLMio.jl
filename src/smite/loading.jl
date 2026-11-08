@@ -204,8 +204,9 @@ SmiteSMLD containing 2D localizations
   the kept fields SMITE stacks per localization (its catSMD list: `PValue`, `LogLikelihood`,
   `PSFSigma`, ...) that hold one value per row; `metadata["smite_row_frames"]` and
   `metadata["smite_row_photons"]` record each row's frame and photons, by which `save_smite`
-  checks that an emitter is still its row before writing those fields back by row. Some older SMITE files hold such a field with one value per
-  dataset; in a file with as many localizations as datasets that cannot be told apart.
+  checks that an emitter is still its row before writing those fields back by row. Some older
+  SMITE files hold such a field with one value per dataset; in a file with as many
+  localizations as datasets that cannot be told apart.
 - On a file with `NDims` 3, warns that `Z` is left out (it stays in the metadata).
 - Emitters with non-zero imaginary components are excluded with a warning.
 - Throws an `ArgumentError` when the file has no pixel size and none is passed, no image size
