@@ -177,6 +177,39 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
+    @testset "complex values" begin
+        mktempdir() do dir
+            # A localization with a non-zero imaginary part in a position, photon or background
+            # field is dropped with a warning; a zero imaginary part loads as its real part.
+            s = smite_smd(5)
+            s["X"] = col(ComplexF32[10, 17.5, 25 + 0im, 32.5, 40])
+            s["Photons_SE"] = col(ComplexF32[30, 30, 30 + 2im, 30, 30])
+            s["Bg"] = col(ComplexF32[5, 5, 5, 5, 5 - 1im])
+            smd = write_smd(dir, "complex.mat", s)
+            @test_logs (:warn, r"Found 2 emitters with non-zero imaginary") load_smite_2d(smd)
+            smld = quiet(() -> load_smite_2d(smd))
+            @test [e.id for e in smld.emitters] == [1, 2, 4]
+            @test [e.x for e in smld.emitters] ≈ (Float64[10, 17.5, 32.5] .- 0.5) .* 0.1
+            @test smld.metadata["complex_fields_removed"] == true
+            @test sort(smld.metadata["complex_fields"]) == ["Bg", "Photons_SE"]
+            @test (smld.metadata["original_emitter_count"], smld.metadata["removed_emitter_count"]) == (5, 2)
+            # Complex values in a field loaded as its default (one per dataset) drop nothing.
+            s = smite_smd(3); s["NDatasets"] = 2.0
+            s["Bg_SE"] = col(ComplexF32[0.5 + 1im, 0.5])
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "complexdefault.mat", s)))
+            @test length(smld.emitters) == 3
+            @test !haskey(smld.metadata, "complex_fields_removed")
+            # Row vectors: the dropped localization is the right one.
+            s = smite_smd(4)
+            s["Y"] = col(ComplexF32[5, 20, 35 + 1im, 50])
+            for (k, v) in s
+                v isa AbstractMatrix && size(v, 2) == 1 && size(v, 1) == 4 && (s[k] = permutedims(v))
+            end
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "complexrows.mat", s)))
+            @test [e.id for e in smld.emitters] == [1, 2, 4]
+        end
+    end
+
     @testset "row vectors and a single localization" begin
         mktempdir() do dir
             # Real files store columns; an SMD assembled in MATLAB may hold rows.

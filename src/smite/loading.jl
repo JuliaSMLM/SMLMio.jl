@@ -1,68 +1,14 @@
-"""
-    has_nonzero_imag(value)
-
-Check if a value has a non-zero imaginary component.
-Works for both scalar values and arrays.
-"""
-function has_nonzero_imag(value)
-    if isa(value, Complex) || eltype(value) <: Complex
-        # For arrays, check if any element has non-zero imaginary part
-        if isa(value, AbstractArray)
-            return any(imag.(value) .!= 0)
-        else
-            # For scalar complex values
-            return imag(value) != 0
-        end
+# For each of `fields` in `cols` (vectors with one value per localization) that holds a non-zero
+# imaginary part, the rows where it does.
+function _complex_rows(cols, fields)
+    rows = Dict{String,Vector{Int}}()
+    for f in fields
+        v = cols[f]
+        eltype(v) <: Complex || continue
+        r = findall(x -> !iszero(imag(x)), v)
+        isempty(r) || (rows[f] = r)
     end
-    return false  # Not complex
-end
-
-"""
-    check_complex_fields(s, fields)
-
-Check if any of the given fields in s are complex and have non-zero imaginary components.
-Returns a tuple with:
-1. Boolean indicating if any fields are complex with non-zero imaginary parts
-2. Dict mapping field names to the linear indices with non-zero imaginary parts
-"""
-function check_complex_fields(s, fields)
-    has_complex = false
-    complex_indices = Dict{String, Vector{Int}}()
-
-    for field in fields
-        if haskey(s, field) && has_nonzero_imag(s[field])
-            has_complex = true
-
-            # Find indices with non-zero imaginary parts
-            if isa(s[field], AbstractArray)
-                complex_indices[field] = findall(!iszero, imag.(vec(s[field])))
-            end
-        end
-    end
-
-    return has_complex, complex_indices
-end
-
-"""
-    get_valid_indices(s, complex_indices)
-
-Get indices of elements that don't have complex values with non-zero imaginary parts
-in any field.
-"""
-function get_valid_indices(s, complex_indices)
-    n = _smite_length(s["X"])
-
-    # Start with all indices
-    valid_indices = collect(1:n)
-
-    # Remove indices that have complex values in any field
-    all_complex_indices = Set{Int}()
-    for indices in values(complex_indices)
-        union!(all_complex_indices, indices)
-    end
-
-    setdiff!(valid_indices, all_complex_indices)
-    return valid_indices
+    return rows
 end
 
 # MAT reads a 1x1 field as a scalar and an empty field as a 0x0 matrix.
@@ -166,9 +112,10 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     fields_to_check = filter(k -> !(k in defaulted),
         ["X", "Y", "Photons", "Bg", "X_SE", "Y_SE", "Photons_SE", "Bg_SE"])
     three_d && append!(fields_to_check, ["Z", "Z_SE"])
-    has_complex, complex_indices = check_complex_fields(cols, fields_to_check)
+    complex_indices = _complex_rows(cols, fields_to_check)
+    has_complex = !isempty(complex_indices)
     if has_complex
-        valid_indices = get_valid_indices(cols, complex_indices)
+        valid_indices = setdiff(1:n, reduce(vcat, values(complex_indices)))
         removed_count = n - length(valid_indices)
         @warn "Found $(removed_count) emitters with non-zero imaginary components. These will be excluded from the result." fields_with_complex=collect(keys(complex_indices))
     else
