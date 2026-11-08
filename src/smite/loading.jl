@@ -35,19 +35,15 @@ const _SMITE_OPTIONAL = ("Photons_SE" => NaN, "Bg_SE" => NaN, "DatasetNum" => 1,
 # Metadata entries the loaders make; save_smite never writes them, and a file field of one of
 # these names is not loaded.
 const _SMITE_LOADER_KEYS = ("original_file", "data_size", "pixel_size", "smite_defaulted_fields",
-    "smite_per_localization_fields", "complex_fields_removed", "complex_fields",
+    "smite_per_localization_fields", "smite_rows", "complex_fields_removed", "complex_fields",
     "original_emitter_count", "removed_emitter_count")
-# SMITE's SMD fields that hold one value for the whole file.
-const _SMITE_SCALARS = ("NDims", "NFrames", "NDatasets", "FrameRate", "PixelSize", "XSize", "YSize",
-    "ZSize", "ZOffset", "IsTransformed", "RegError")
-
-# A field with one value per localization: a vector (or n x 1 or 1 x n) of n values for n >= 2;
-# for a single localization, which MAT reads as scalars, a number that is not one of SMITE's
-# whole-file fields. With n equal to NDatasets, a per-dataset field cannot be told apart.
-function _smite_per_localization(key, v, n)
-    n >= 2 && return v isa AbstractArray && ndims(v) <= 2 && length(v) == n && (v isa AbstractVector || 1 in size(v))
-    return n == 1 && v isa Number && !(key in _SMITE_SCALARS)
-end
+# The SMD fields SMITE stacks with one value per localization (catSMD.m's StackableFields).
+# Those the loaders keep in metadata, when they hold one value per localization, follow the
+# emitters through save_smite.
+const _SMITE_STACKABLE = ("XBoxCorner", "YBoxCorner", "X", "Y", "Z", "X_SE", "Y_SE", "Z_SE",
+    "Photons", "Photons_SE", "Bg", "Bg_SE", "PSFSigma", "PSFSigmaX", "PSFSigmaY", "PSFSigma_SE",
+    "PSFSigmaX_SE", "PSFSigmaY_SE", "PValue", "LogLikelihood", "ThreshFlag", "NCombined", "IndSMD",
+    "DatasetNum", "FrameNum", "ConnectID", "PreGCConnectID", "RegError")
 
 # Shared body of load_smite_2d and load_smite_3d.
 function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
@@ -154,14 +150,17 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
                     three_d ? ["ZSize"] : String[]))
     setdiff!(used, defaulted)
     metadata = Dict{String,Any}(k => v for (k, v) in s if !(k in used || k in _SMITE_LOADER_KEYS))
+    # SMITE's per-localization fields among them, with one value per file row: save_smite writes
+    # them for each emitter's row (its id) when every emitter is still that row, which smite_rows
+    # (each row's frame and photons) lets it check.
+    perloc = sort!([k for (k, v) in metadata if k in _SMITE_STACKABLE && _smite_length(v) == n])
     # The loaders' own entries, after the file's fields so that none of these is a file's.
-    # smite_per_localization_fields lists the fields kept above that hold one value per file row,
-    # which save_smite writes back by each emitter's row (its id).
     metadata["original_file"] = smd.filename
     metadata["data_size"] = data_size
     metadata["pixel_size"] = px
-    metadata["smite_per_localization_fields"] =
-        sort!([k for (k, v) in metadata if _smite_per_localization(k, v, n)])
+    metadata["smite_per_localization_fields"] = perloc
+    metadata["smite_rows"] = (frame=Int[Int(v) for v in cols["FrameNum"]],
+                              photons=Float64[Float64(real(v)) for v in cols["Photons"]])
     isempty(defaulted) || (metadata["smite_defaulted_fields"] = defaulted)
     if has_complex
         metadata["complex_fields_removed"] = true

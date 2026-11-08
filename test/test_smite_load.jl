@@ -336,13 +336,67 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             save_smite(b, dir, "screened.mat")
             sc = matread(joinpath(dir, "screened.mat"))["SMD"]
             @test vec(sc["PValue"]) == Float32[0.1, 0.3, 0.4, 0.5]
-            # Data sets combined from several files cannot be traced to one file's rows: the fields
-            # are dropped with a warning, never written next to the wrong localizations.
+            # Subsets of one file concatenated: every emitter is still its row, so the fields follow.
             both = SMLMCore.cat_smld(a, kept)
-            @test_logs (:warn, r"not saved") match_mode = :any save_smite(both, dir, "both.mat")
+            save_smite(both, dir, "both.mat")
             bo = matread(joinpath(dir, "both.mat"))["SMD"]
-            @test !haskey(bo, "PValue") && !haskey(bo, "LogLikelihood")
-            @test length(vec(bo["X"])) == 8
+            @test vec(bo["PValue"]) == Float32[0.1, 0.2, 0.3, 0.4, 0.5, 0.3, 0.4, 0.5]
+        end
+    end
+
+    @testset "save_smite drops SMITE's fields for emitters that are not their file rows" begin
+        mktempdir() do dir
+            s = smite_smd(6)
+            s["Photons"] = col(Float32[1000, 1100, 1200, 1300, 1400, 1500])
+            s["LogLikelihood"] = col([-1.0, -2.0, -3.0, -4.0, -5.0, -6.0])
+            a = load_smite_2d(write_smd(dir, "a.mat", s))
+            md = a.metadata
+            notsaved(smld, name) = begin
+                @test_logs (:warn, r"LogLikelihood.*not saved") match_mode = :any save_smite(smld, dir, name)
+                out = matread(joinpath(dir, name))["SMD"]
+                @test !haskey(out, "LogLikelihood") && !haskey(out, "PValue")
+                out
+            end
+            E = Emitter2DFit{Float64}
+            # Frame connection: each combined localization keeps its first member's id, with summed
+            # photons; it is not that row, and SMITE's combined fields are not that row's.
+            c = [E(e.x, e.y, 3e.photons, e.bg, e.σ_x, e.σ_y, e.σ_photons, e.σ_bg;
+                   frame=e.frame, dataset=e.dataset, track_id=e.track_id, id=e.id) for e in a.emitters[[1, 4, 6]]]
+            out = notsaved(SmiteSMLD{Float64,E}(c, a.camera, a.n_frames, a.n_datasets, copy(md)), "fc.mat")
+            @test length(vec(out["X"])) == 3
+            # Two files joined by hand with the first file's metadata: the second file's emitters
+            # carry ids in range, but they are not the first file's rows.
+            t = copy(s); t["Photons"] = col(Float32[2000, 2100, 2200, 2300, 2400, 2500])
+            b = load_smite_2d(write_smd(dir, "b.mat", t))
+            joined = vcat(filter(e -> e.frame <= 2, a.emitters), filter(e -> e.frame >= 3, b.emitters))
+            notsaved(SmiteSMLD{Float64,E}(joined, a.camera, a.n_frames, a.n_datasets, copy(md)), "joined.mat")
+            # Emitters built by hand (id 0) next to a loaded metadata dict.
+            fresh = [E(1.0, 2.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5)]
+            notsaved(SmiteSMLD{Float64,E}(fresh, a.camera, 1, 1, copy(md)), "fresh.mat")
+            # Frames changed after loading (as merge_smld's frame adjustment does).
+            shifted = [E(e.x, e.y, e.photons, e.bg, e.σ_x, e.σ_y, e.σ_photons, e.σ_bg;
+                         frame=e.frame + 6, dataset=e.dataset, track_id=e.track_id, id=e.id) for e in a.emitters]
+            notsaved(SmiteSMLD{Float64,E}(shifted, a.camera, 12, 1, copy(md)), "shifted.mat")
+        end
+    end
+
+    @testset "SMITE's own list of per-localization fields" begin
+        mktempdir() do dir
+            # Only the fields SMITE stacks per localization (catSMD's StackableFields) follow the
+            # emitters; DriftX with as many frames as localizations, the loaders' own entries, or a
+            # field SMITE does not stack are written as they were.
+            s = smite_smd(4); s["NFrames"] = 4.0; s["DriftX"] = col(Float32[0.1, 0.2, 0.3, 0.4])
+            s["Extra"] = col([1.0, 2.0, 3.0, 4.0]); s["PSFSigma"] = col(Float32[1.1, 1.2, 1.3, 1.4])
+            a = load_smite_2d(write_smd(dir, "list.mat", s))
+            @test sort(a.metadata["smite_per_localization_fields"]) == ["PSFSigma", "PValue", "ThreshFlag"]
+            kept = SMLMCore.@filter(a, frame >= 3)
+            save_smite(kept, dir, "listkept.mat")
+            out = matread(joinpath(dir, "listkept.mat"))["SMD"]
+            @test vec(out["PSFSigma"]) == Float32[1.3, 1.4]
+            @test vec(out["DriftX"]) == Float32[0.1, 0.2, 0.3, 0.4]
+            # A single localization: SMITE's per-localization fields are scalars; nothing else is.
+            one = load_smite_2d(write_smd(dir, "one.mat", smite_smd(1)))
+            @test sort(one.metadata["smite_per_localization_fields"]) == ["PValue", "ThreshFlag"]
         end
     end
 

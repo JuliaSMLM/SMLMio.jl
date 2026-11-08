@@ -117,19 +117,27 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
         key in defaulted && haskey(md, key) && all(v -> isequal(v, default), s[key]) && (s[key] = md[key])
     end
 
-    # Fields the loader kept with one value per file row (PValue, LogLikelihood, ...) are written
-    # for these emitters' rows, the file row being each emitter's id. Combined data sets, or ids
-    # that are not distinct file rows, cannot be traced: those fields are dropped with a warning.
+    # SMITE's per-localization fields the loader kept (PValue, LogLikelihood, ...) are written for
+    # these emitters' file rows, the row being each emitter's id, when every emitter is still its
+    # row: same frame and photons as the loader recorded for that row (smite_rows). Otherwise
+    # (frame-connected or combined localizations, emitters from another file, changed frames,
+    # ids that are not rows) those fields are dropped with a warning, never misplaced.
     perloc = filter(k -> haskey(md, k), get(md, "smite_per_localization_fields", String[]))
+    rec = get(md, "smite_rows", nothing)
     rows = Int[]
     traceable = isempty(perloc)
-    if !traceable && !haskey(md, "concatenated_from") && !haskey(md, "merged_from") &&
-       all(e -> hasproperty(e, :id), smld.emitters)
-        rows = Int[e.id for e in smld.emitters]
-        traceable = allunique(rows) && all(k -> all(r -> 1 <= r <= _smite_length(md[k]), rows), perloc)
+    if !traceable && rec !== nothing &&
+       all(e -> hasproperty(e, :id) && hasproperty(e, :frame) && hasproperty(e, :photons), smld.emitters)
+        nrows = length(rec.frame)
+        traceable = all(k -> _smite_length(md[k]) == nrows, perloc) && all(smld.emitters) do e
+            r = e.id
+            r isa Integer && 1 <= r <= nrows && e.frame == rec.frame[r] && isequal(e.photons, rec.photons[r])
+        end
+        traceable && (rows = Int[e.id for e in smld.emitters])
     end
-    traceable || @warn("save_smite: $(join(perloc, ", ")) not saved: their rows cannot be traced to " *
-                       "these emitters (combined data sets, or emitter ids that are not file rows)")
+    traceable || @warn("save_smite: $(join(perloc, ", ")) not saved: these emitters are not all rows " *
+                       "of the file they were loaded from (frame-connected or combined localizations, " *
+                       "another file's emitters, changed frames or photons, or ids that are not rows)")
 
     # Add any additional fields from metadata, except the loaders' own entries
     for (key, value) in md
