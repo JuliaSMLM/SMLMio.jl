@@ -36,8 +36,6 @@ Save SMLD data to SMITE's SMD .mat format, readable by `load_smite_2d` and `load
 function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     # Create SMD structure
     s = Dict{String,Any}()
-    
-    n = length(smld.emitters)
 
     # Z columns for v0.7.0's rule (an Emitter3DFit element type), or for non-empty 3D data whose
     # z and σ_z columns MAT writes as MATLAB single or double. Anything else gets v0.7.0's columns
@@ -59,16 +57,19 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
     # the center of the top-left pixel; positions here are microns from the camera's corner.
-    # SMITE has one PixelSize, so the camera's pixels must be uniform and square.
+    # SMITE has one PixelSize, so the camera's pixels must be uniform and square: every edge lies
+    # on the first pixel's grid to a thousandth of a pixel (edges carry floating rounding, which
+    # in a Float32 camera grows with distance from the origin).
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
     x0, y0 = ex[1], ey[1]
-    px = (ex[end] - x0) / (length(ex) - 1)
-    all(d -> isapprox(d, px; rtol=1e-6), diff(ex)) && all(d -> isapprox(d, px; rtol=1e-6), diff(ey)) ||
+    px = ex[2] - ex[1]
+    on_grid(edges, e0) = all(k -> abs(edges[k] - (e0 + (k - 1) * px)) <= px / 1000, eachindex(edges))
+    px > 0 && on_grid(ex, x0) && on_grid(ey, y0) ||
         throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels " *
                             "are not uniform and square"))
-    s["X"] = [(e.x - x0) / px + 0.5 for e in smld.emitters]
-    s["Y"] = [(e.y - y0) / px + 0.5 for e in smld.emitters]
+    s["X"] = _same_float([e.x for e in smld.emitters], e -> (e.x - x0) / px + 0.5, smld.emitters)
+    s["Y"] = _same_float([e.y for e in smld.emitters], e -> (e.y - y0) / px + 0.5, smld.emitters)
     if zcols !== nothing
         s["Z"] = zcols[1]
     end
@@ -76,8 +77,8 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     s["Photons"] = [e.photons for e in smld.emitters]
     s["Bg"] = [e.bg for e in smld.emitters]
     
-    s["X_SE"] = [e.σ_x / px for e in smld.emitters]
-    s["Y_SE"] = [e.σ_y / px for e in smld.emitters]
+    s["X_SE"] = _same_float([e.σ_x for e in smld.emitters], e -> e.σ_x / px, smld.emitters)
+    s["Y_SE"] = _same_float([e.σ_y for e in smld.emitters], e -> e.σ_y / px, smld.emitters)
     if zcols !== nothing
         s["Z_SE"] = zcols[2]
     end
@@ -85,17 +86,18 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     s["Photons_SE"] = [e.σ_photons for e in smld.emitters]
     s["Bg_SE"] = [e.σ_bg for e in smld.emitters]
     
-    s["FrameNum"] = [e.frame for e in smld.emitters]
-    s["DatasetNum"] = [e.dataset for e in smld.emitters]
-    s["ConnectID"] = [e.track_id for e in smld.emitters]
-    
+    # Counts and indices are doubles, as SMITE writes them (MATLAB integer arithmetic rounds)
+    s["FrameNum"] = Float64[e.frame for e in smld.emitters]
+    s["DatasetNum"] = Float64[e.dataset for e in smld.emitters]
+    s["ConnectID"] = Float64[e.track_id for e in smld.emitters]
+
     # Add metadata: what the loaders need to read the file back, from the camera
-    s["NFrames"] = smld.n_frames
-    s["NDatasets"] = smld.n_datasets
-    s["XSize"] = length(ex) - 1
-    s["YSize"] = length(ey) - 1
-    s["PixelSize"] = px
-    s["NDims"] = zcols === nothing ? 2 : 3
+    s["NFrames"] = Float64(smld.n_frames)
+    s["NDatasets"] = Float64(smld.n_datasets)
+    s["XSize"] = Float64(length(ex) - 1)
+    s["YSize"] = Float64(length(ey) - 1)
+    s["PixelSize"] = Float64(px)
+    s["NDims"] = zcols === nothing ? 2.0 : 3.0
 
     # Add any additional fields from metadata, except the loaders' own entries
     # (data_size and pixel_size repeat XSize, YSize and PixelSize)
@@ -108,4 +110,12 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     
     # Save to file
     matwrite(joinpath(filepath, filename), Dict("SMD" => s))
+end
+
+# The column f(e) for each emitter, in the float type of the emitters' own column `col` when that
+# is Float32 or Float64 (MATLAB single or double), so Float32 data stay single.
+function _same_float(col, f, emitters)
+    vals = [f(e) for e in emitters]
+    T = eltype(col)
+    return T in (Float32, Float64) ? convert(Vector{T}, vals) : vals
 end

@@ -263,4 +263,30 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test_throws r"one square pixel size" save_smite(rect, dir, "rect.mat")
         end
     end
+
+    @testset "save_smite cameras and number types" begin
+        mktempdir() do dir
+            # Float32 cameras, whose edges carry Float32 rounding, save and load back.
+            e32 = [Emitter2DFit{Float32}(1.0f0, 2.0f0, 1000.0f0, 5.0f0, 0.02f0, 0.03f0, 30.0f0, 0.5f0),
+                   Emitter2DFit{Float32}(40.0f0, 25.5f0, 900.0f0, 4.0f0, 0.02f0, 0.03f0, 30.0f0, 0.5f0)]
+            for cam in (IdealCamera(1:512, 1:512, 0.1f0), SMLMCore.SCMOSCamera(256, 256, 0.1f0, 1.6f0))
+                save_smite(BasicSMLD(e32, cam, 1, 1, Dict{String,Any}()), dir, "f32.mat")
+                b = load_smite_2d(SmiteSMD(dir, "f32.mat"))
+                @test [e.x for e in b.emitters] ≈ [1.0, 40.0] rtol = 1e-6
+                @test [e.y for e in b.emitters] ≈ [2.0, 25.5] rtol = 1e-6
+                @test length(b.camera.pixel_edges_x) == length(cam.pixel_edges_x)
+            end
+            # Float32 emitters keep Float32 position columns (MATLAB single), as before.
+            saved = matread(joinpath(dir, "f32.mat"))["SMD"]
+            @test eltype(saved["X"]) == Float32 && eltype(saved["X_SE"]) == Float32
+            # The saved PixelSize is the camera's pixel, not a rounded mean over its width.
+            e64 = [Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5)]
+            save_smite(BasicSMLD(e64, IdealCamera(1:200, 1:200, 0.0954), 1, 1, Dict{String,Any}()), dir, "px.mat")
+            saved = matread(joinpath(dir, "px.mat"))["SMD"]
+            @test saved["PixelSize"] === 0.0954
+            # Counts and indices are doubles, as SMITE writes them.
+            @test all(k -> saved[k] isa Float64, ("XSize", "YSize", "NDims", "NFrames", "NDatasets"))
+            @test all(k -> eltype(saved[k]) == Float64, ("FrameNum", "DatasetNum", "ConnectID"))
+        end
+    end
 end
