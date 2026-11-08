@@ -30,3 +30,17 @@ Fixed relative to SMLMData 0.7.1:
   `data_size` and `pixel_size` written as SMD fields). It now writes those from the camera, and
   `NDims`, and skips the loaders' own metadata; a camera whose pixels are not uniform and square
   is an `ArgumentError`. `save_smite` takes any `AbstractSMLD`, not only a `SmiteSMLD`.
+- After a filter, or complex screening at load, `save_smite` wrote the SMD fields kept in
+  metadata (`PValue`, `LogLikelihood`, ...) unchanged next to fewer localizations, so they
+  belonged to other localizations. The loaders list those fields in
+  `metadata["smite_per_localization_fields"]` and `save_smite` writes them by each emitter's file
+  row (`id`); for combined data sets it drops them with a warning.
+- `save_smite` wrote the loaders' own metadata (`original_file`, `complex_*`) into the file, and
+  loading it back reported the earlier file's name and complex screening. The loaders' entries
+  are now never saved and never taken from a file.
+- `save_smite` wrote counts and indices (`FrameNum`, `DatasetNum`, `ConnectID`, `NFrames`,
+  `NDatasets`) as MATLAB int64; SMITE writes doubles, and MATLAB integer arithmetic rounds. They
+  are now doubles. Defaulted fields that nobody has set since loading are saved as the file had
+  them (an empty `ConnectID` stays empty).
+- `load_smite_2d` on a 3D file now warns that it leaves out `Z`; a camera whose first edge is
+  not at 0 now warns on save, since SMITE has no origin.

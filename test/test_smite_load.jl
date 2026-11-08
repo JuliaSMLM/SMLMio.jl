@@ -411,6 +411,14 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             # Counts and indices are doubles, as SMITE writes them.
             @test all(k -> saved[k] isa Float64, ("XSize", "YSize", "NDims", "NFrames", "NDatasets"))
             @test all(k -> eltype(saved[k]) == Float64, ("FrameNum", "DatasetNum", "ConnectID"))
+            # SMITE has no origin: a camera whose first edge is not at 0 warns, and the file loads
+            # back with the camera at 0 and the positions moved with it.
+            off = IdealCamera(collect(1.0:0.1:7.4), collect(2.0:0.1:8.4))
+            e = [Emitter2DFit{Float64}(1.05, 2.25, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5)]
+            @test_logs (:warn, r"first pixel edge is at \(1.0, 2.0\)") save_smite(BasicSMLD(e, off, 1, 1, Dict{String,Any}()), dir, "off.mat")
+            b = load_smite_2d(SmiteSMD(dir, "off.mat"))
+            @test b.emitters[1].x ≈ 0.05 && b.emitters[1].y ≈ 0.25
+            @test b.camera.pixel_edges_x[1] == 0
         end
     end
 end

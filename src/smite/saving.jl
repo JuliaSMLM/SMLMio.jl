@@ -1,7 +1,8 @@
 """
     save_smite(smld::AbstractSMLD, filepath::String, filename::String)
 
-Save SMLD data to SMITE's SMD .mat format, readable by `load_smite_2d` and `load_smite_3d`.
+Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite_2d`,
+`load_smite_3d` and SMITE.
 
 # Arguments
 - `smld::AbstractSMLD`: SMLD object to save (a `SmiteSMLD`, a `BasicSMLD` or any other SMLD
@@ -9,37 +10,43 @@ Save SMLD data to SMITE's SMD .mat format, readable by `load_smite_2d` and `load
 - `filepath::String`: Directory path where to save the file
 - `filename::String`: Name of the output .mat file
 
-# Notes
-- Saves in MATLAB v7.3 format
-- Writes `X`, `Y`, `X_SE` and `Y_SE` in SMITE's pixels, (1, 1) the center of the camera's
-  top-left pixel: `X = (x - x_edge) / pixel_size + 0.5`, `X_SE = σ_x / pixel_size`, where
-  `x_edge` is the camera's first pixel edge. `Z` and `Z_SE` stay in microns.
-- Writes `XSize`, `YSize` and `PixelSize` from the camera, and `NDims` (3 when it writes `Z`,
-  else 2). SMITE has one pixel size, so a camera whose pixels are not uniform and square is an
-  `ArgumentError`.
-- Preserves all metadata fields whose names are not emitter columns, except the loaders' own
-  `data_size`, `pixel_size` and `smite_defaulted_fields`; an emitter column wins over a metadata
-  entry of the same name, so data that get `Z` and `Z_SE` here replace a metadata `Z` or `Z_SE`
-  that v0.7.0 would have written
-- Writes `Z` and `Z_SE` for an `Emitter3DFit` element type (as v0.7.0 did), or for non-empty 3D
-  data (`emitter_ndims`) whose every emitter has properties `z` and `σ_z` and whose `z` and `σ_z`
-  columns each come out as a `Vector{Float32}` or `Vector{Float64}`. Otherwise it writes v0.7.0's
-  columns, with no `Z`, and warns when non-empty 3D or mixed 2D/3D data lose `Z` (a SMITE SMD
-  file has one `Z` column for all localizations, so save 2D and 3D data separately to keep it).
-  Apart from the camera check above, it never throws where v0.7.0 saved.
-- Only `Float32` and `Float64` columns widen, because MATLAB stores those as single and double:
-  MAT.jl writes `Float64`, `Float32`, `Int` and `Bool` vectors but throws on `Float16`,
-  `Rational`, `BigFloat` and `missing`, and writes a mixed `Float32`/`Float64` column as a cell.
-- A type whose `propertynames` lists a property that `getproperty` refuses breaks Julia's
-  property interface and is not supported.
+# What it writes
+- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, (1, 1) the center of the camera's top-left pixel:
+  `X = (x - x_edge) / pixel_size + 0.5`, `X_SE = σ_x / pixel_size`, with `x_edge` the camera's
+  first pixel edge, in the emitters' float type. SMITE has no origin: a camera whose first edge
+  is not at 0 warns, and the file loads back with the camera at 0 and the positions moved by
+  that offset.
+- `Photons`, `Bg`, their standard errors, `FrameNum`, `DatasetNum` and `ConnectID` (the track
+  id). Counts and indices are doubles, as SMITE writes them.
+- `Z` and `Z_SE` (microns) for `Emitter3DFit` emitters, or for non-empty 3D data
+  (`emitter_ndims`) whose every emitter has properties `z` and `σ_z` and whose `z` and `σ_z`
+  columns are each all `Float32` or all `Float64` (MATLAB single or double; MAT.jl cannot write
+  `Float16`, `Rational`, `BigFloat` or `missing`, and writes a mixed column as a cell). Non-empty
+  3D or mixed 2D/3D data without such columns save without `Z`, with a warning: an SMD has one
+  `Z` column for all localizations, so save 2D and 3D data separately to keep it.
+- `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets`, and `NDims` (3 with
+  `Z`, else 2). SMITE has one pixel size, so a camera whose pixels are not uniform and square is
+  an `ArgumentError`. An sCMOS camera's calibration maps are not saved; the file loads back
+  with an `IdealCamera`.
+- Every metadata entry that is not an emitter column, except the loaders' own entries
+  (`original_file`, `data_size`, `pixel_size`, `smite_*`, `complex_*`). The SMITE fields a
+  loader kept with one value per localization (`metadata["smite_per_localization_fields"]`:
+  `PValue`, `LogLikelihood`, ...) are written for the saved emitters' file rows (their `id`);
+  for combined data sets, or ids that are not file rows, they are dropped with a warning. An
+  optional field the loader defaulted (`metadata["smite_defaulted_fields"]`) that still holds
+  only its default is written as the file had it, so an empty `ConnectID` stays empty.
+
+Not saved: `σ_xy` (SMITE has no such field; it loads back as 0) and the emitter `id`, which
+loads back as the row in the new file. A type whose `propertynames` lists a property that
+`getproperty` refuses breaks Julia's property interface and is not supported.
 """
 function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     # Create SMD structure
     s = Dict{String,Any}()
 
-    # Z columns for v0.7.0's rule (an Emitter3DFit element type), or for non-empty 3D data whose
-    # z and σ_z columns MAT writes as MATLAB single or double. Anything else gets v0.7.0's columns
-    # and never throws where v0.7.0 saved; non-empty 3D or mixed data that lose Z get a warning.
+    # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose z and σ_z columns
+    # MAT writes as MATLAB single or double. Anything else saves without Z; non-empty 3D or mixed
+    # data that lose Z get a warning.
     d = emitter_ndims(smld.emitters)
     zcols = nothing
     if eltype(smld.emitters) <: Emitter3DFit
@@ -68,6 +75,8 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     px > 0 && on_grid(ex, x0) && on_grid(ey, y0) ||
         throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels " *
                             "are not uniform and square"))
+    iszero(x0) && iszero(y0) || @warn("save_smite: the camera's first pixel edge is at ($x0, $y0) µm; " *
+        "SMITE has no origin, so the file loads back with the camera at 0 and positions moved by that offset")
     s["X"] = _same_float([e.x for e in smld.emitters], e -> (e.x - x0) / px + 0.5, smld.emitters)
     s["Y"] = _same_float([e.y for e in smld.emitters], e -> (e.y - y0) / px + 0.5, smld.emitters)
     if zcols !== nothing

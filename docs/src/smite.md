@@ -52,7 +52,14 @@ smld3 = load_smite_3d(smd)     # Emitter3DFit{Float64}, needs Z and Z_SE
 smld.metadata["pixel_size"]    # microns per pixel, from the file's PixelSize
 smld.metadata["data_size"]     # [YSize, XSize]
 smld.metadata["DriftX"]        # every other SMD field, as SMITE wrote it (drift in pixels)
+smld.metadata["PValue"]        # one value per row of the file; emitter e is row e.id
 ```
+
+Each emitter's `id` is its row in the file. The SMD fields kept in metadata with one value per
+row (`PValue`, `LogLikelihood`, `PSFSigma`, `ThreshFlag`, ...) are listed in
+`metadata["smite_per_localization_fields"]`; index them by `id`, for example
+`smld.metadata["PValue"][e.id]`. In a file whose number of localizations equals its number of
+datasets, a per-dataset field cannot be told apart from a per-localization one.
 
 What the loaders do with fields SMITE leaves empty or writes in another shape:
 
@@ -69,6 +76,7 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
 - **No localizations.** SMITE leaves `XSize` and `YSize` empty in a result without
   localizations, so no camera can be built and the loader throws, naming the missing image size.
 - **3D.** SMITE's SMD has no `ZSize`; when a file has one, it is appended to `data_size`.
+  `load_smite_2d` on a file with `NDims` 3 warns that it leaves `Z` out (kept in metadata).
 - Rows or columns: an SMD built by hand in MATLAB with row vectors loads like SMITE's columns.
 - Localizations with a non-zero imaginary part in any position, photon or background field are
   dropped with a warning.
@@ -80,13 +88,28 @@ save_smite(smld, "output/directory", "processed_Results.mat")
 ```
 
 `save_smite` takes any SMLD (a `SmiteSMLD`, a `BasicSMLD`, ...) and writes MATLAB v7.3 that
-`load_smite_2d` and `load_smite_3d` read back to the same emitters, camera, frames and datasets:
+`load_smite_2d`, `load_smite_3d` and SMITE read. It writes:
 
-- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels; `Z` and `Z_SE` in microns, for 3D data
-- `XSize`, `YSize` and `PixelSize` from the camera, and `NDims`. SMITE has one pixel size, so a
-  camera whose pixels are not uniform and square is an error.
-- every metadata entry whose name is not an emitter column, except the loaders' own
-  `data_size`, `pixel_size` and `smite_defaulted_fields`
+- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Z`, `Z_SE` in microns for 3D data
+- `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
+  and indices as doubles, as SMITE writes them. SMITE has one pixel size, so a camera whose
+  pixels are not uniform and square is an error.
+- every metadata entry that is not an emitter column, except the loaders' own (`original_file`,
+  `data_size`, `pixel_size`, `smite_*`, `complex_*`). The per-localization fields a loader kept
+  are written for the saved emitters' rows, so after a filter `PValue` still belongs to its
+  localization; for data sets combined from several files they are dropped with a warning.
+  An optional field the loader defaulted and nobody has set since is written as the file had
+  it (an empty `ConnectID` stays empty).
+
+Loading the saved file gives back the emitters' positions, uncertainties, photons, background,
+frames, datasets and track ids, and `n_frames` and `n_datasets`. It does not give back:
+
+- `σ_xy`: SMITE has no such field; it loads as 0.
+- `id`: it loads as the row in the new file.
+- the camera type: an sCMOS camera's calibration maps are not saved, and the file loads with an
+  `IdealCamera` of the same pixels.
+- a camera origin other than 0: SMITE has none, so `save_smite` warns, and the file loads with
+  the camera at 0 and the positions moved by the same offset.
 
 Example workflow:
 
