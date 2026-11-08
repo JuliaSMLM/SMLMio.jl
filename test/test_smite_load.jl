@@ -138,6 +138,30 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
+    @testset "results without localizations" begin
+        mktempdir() do dir
+            # SMITE leaves XSize, YSize, NFrames, NDatasets and every column empty in a result
+            # with no localizations: no camera can be built, and the error says so.
+            s = smite_smd(1)
+            for (k, v) in s
+                (v isa Number || v isa AbstractArray) && k != "PixelSize" && (s[k] = zeros(0, 0))
+            end
+            @test_throws r"no image size \(XSize, YSize absent or empty; 0 localizations\)" load_smite_2d(write_smd(dir, "empty.mat", s))
+            # No localizations but an image size: an empty data set with its camera.
+            s = smite_smd(1)
+            for k in ("X", "Y", "X_SE", "Y_SE", "Photons", "Bg", "Photons_SE", "Bg_SE", "FrameNum",
+                      "DatasetNum", "ConnectID", "PValue", "ThreshFlag")
+                s[k] = zeros(0, 0)
+            end
+            smld = load_smite_2d(write_smd(dir, "none.mat", s))
+            @test isempty(smld.emitters)
+            @test length(smld.camera.pixel_edges_x) == 65
+            # No NFrames: an error that names it.
+            s = smite_smd(2); delete!(s, "NFrames")
+            @test_throws r"no NFrames or NDatasets" load_smite_2d(write_smd(dir, "nonframes.mat", s))
+        end
+    end
+
     @testset "row vectors and a single localization" begin
         mktempdir() do dir
             # Real files store columns; an SMD assembled in MATLAB may hold rows.

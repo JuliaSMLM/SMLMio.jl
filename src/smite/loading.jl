@@ -135,8 +135,15 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
         file_px
     end
     px > 0 || throw(ArgumentError("$where: pixel size $px is not positive"))
-    xsize, ysize = s["XSize"], s["YSize"]
-    nframes, ndatasets = s["NFrames"], s["NDatasets"]
+    xsize = _smite_scalar(s, "XSize")
+    ysize = _smite_scalar(s, "YSize")
+    (xsize === nothing || ysize === nothing) && throw(ArgumentError(
+        "$where has no image size (XSize, YSize absent or empty; $n localizations), so its camera " *
+        "cannot be built"))
+    nframes = _smite_scalar(s, "NFrames")
+    ndatasets = _smite_scalar(s, "NDatasets")
+    (nframes === nothing || ndatasets === nothing) && throw(ArgumentError(
+        "$where has no NFrames or NDatasets"))
     camera = IdealCamera(1:Int(xsize), 1:Int(ysize), px)
 
     # Screen complex values in the per-localization columns read from the file
@@ -222,9 +229,10 @@ SmiteSMLD containing 2D localizations
   `metadata["smite_defaulted_fields"]` lists them. A non-empty field of the wrong length warns.
 - Every other SMD field is kept in the metadata as SMITE wrote it (for example `DriftX` in pixels).
 - Emitters with non-zero imaginary components are excluded with a warning.
-- Throws an `ArgumentError` when the file has no pixel size and none is passed, or when a
-  required field (`X`, `Y`, `Photons`, `Bg`, `X_SE`, `Y_SE`, `FrameNum`) does not hold one value
-  per localization.
+- Throws an `ArgumentError` when the file has no pixel size and none is passed, no image size
+  (`XSize`, `YSize`; SMITE leaves them empty in a result without localizations), no `NFrames`
+  or `NDatasets`, or a required field (`X`, `Y`, `Photons`, `Bg`, `X_SE`, `Y_SE`, `FrameNum`)
+  without one value per localization.
 """
 load_smite_2d(smd::SmiteSMD; pixel_size=nothing) = _load_smite(smd, false, pixel_size)
 
