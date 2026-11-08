@@ -181,7 +181,8 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
 
     # Metadata
     data_size = [Int(ysize), Int(xsize)]
-    three_d && push!(data_size, Int(s["ZSize"]))
+    zsize = _smite_scalar(s, "ZSize")   # SMITE's SMD has no ZSize; kept when a file has one
+    three_d && zsize !== nothing && push!(data_size, Int(zsize))
     metadata = Dict{String,Any}(
         "original_file" => smd.filename,
         "data_size" => data_size,
@@ -242,7 +243,8 @@ load_smite_2d(smd::SmiteSMD; pixel_size=nothing) = _load_smite(smd, false, pixel
 Load a 3D SMITE SMD .mat file into a `SmiteSMLD` of `Emitter3DFit{Float64}`.
 
 Positions load as in [`load_smite_2d`](@ref); `Z` and `Z_SE` are microns in SMITE and load
-unchanged. The file also needs `Z` and `Z_SE` with one value per localization.
+unchanged. The file also needs `Z` and `Z_SE` with one value per localization. SMITE's SMD has
+no `ZSize`; when a file has one, it is appended to `metadata["data_size"]`.
 
 # Arguments
 - `smd::SmiteSMD`: SmiteSMD object specifying the file to load

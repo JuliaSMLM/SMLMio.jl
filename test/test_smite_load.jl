@@ -138,6 +138,21 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
+    @testset "3D without ZSize" begin
+        # SMITE's createSMD defines XSize and YSize but no ZSize. This SMD is hand-built with
+        # SMITE's fields.
+        mktempdir() do dir
+            s = smite_smd_3d(3)
+            @test !haskey(s, "ZSize")
+            smld = load_smite_3d(write_smd(dir, "nozsize.mat", s))
+            @test length(smld.emitters) == 3
+            @test [e.z for e in smld.emitters] ≈ vec(s["Z"])
+            @test smld.metadata["data_size"] == [64, 64]
+            s["ZSize"] = 7.0
+            @test load_smite_3d(write_smd(dir, "zsize.mat", s)).metadata["data_size"] == [64, 64, 7]
+        end
+    end
+
     @testset "results without localizations" begin
         mktempdir() do dir
             # SMITE leaves XSize, YSize, NFrames, NDatasets and every column empty in a result
