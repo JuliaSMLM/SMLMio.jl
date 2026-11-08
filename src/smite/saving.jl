@@ -161,15 +161,27 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
         end
     end
 
-    # Add any additional fields from metadata, except the loaders' own entries
+    # Add any additional fields from metadata, except the loaders' own entries. A field SMITE
+    # stacks per localization that the loaded file held otherwise (often one value per dataset)
+    # is dropped when the saved localizations are as many as its values, since a load would take
+    # it for one value per localization; with another count it is written as the file had it.
+    loaded = haskey(md, "smite_per_localization_fields")
+    nsaved = length(smld.emitters)
+    ambiguous = String[]
     for (key, value) in md
         (key in _SMITE_LOADER_KEYS || haskey(s, key)) && continue
         if key in perloc
             key in towrite || continue
             value = _smite_vec(value)[rows]
+        elseif loaded && key in _SMITE_STACKABLE && nsaved > 0 && _smite_length(value) == nsaved
+            push!(ambiguous, key)
+            continue
         end
         s[key] = value
     end
+    isempty(ambiguous) || @warn("save_smite: $(join(sort!(ambiguous), ", ")) not saved: the loaded file " *
+        "held them with values that are not one per localization (often one per dataset), as many as " *
+        "the saved localizations, so a load would take them for one per localization")
     # A 3D file loaded as 2D keeps Z in metadata, written back above for each emitter: say 3D
     zcols === nothing && !isempty(smld.emitters) && haskey(s, "Z") &&
         _smite_length(s["Z"]) == length(smld.emitters) && (s["NDims"] = 3.0)

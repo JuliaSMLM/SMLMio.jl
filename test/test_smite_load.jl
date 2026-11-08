@@ -415,8 +415,10 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test length(vec(r["PValue"])) == 2
             # A 2D file filtered to no localizations saves as 2D.
             none = SMLMCore.@filter(a, frame > 100)
-            save_smite(none, dir, "none.mat")
-            @test matread(joinpath(dir, "none.mat"))["SMD"]["NDims"] == 2
+            @test_logs save_smite(none, dir, "none.mat")      # nothing dropped, no warning
+            nf = matread(joinpath(dir, "none.mat"))["SMD"]
+            @test nf["NDims"] == 2
+            @test haskey(nf, "Z") && isempty(nf["Z"])      # the 2D file's empty Z, as it was
         end
     end
 
@@ -437,6 +439,24 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             # A single localization: SMITE's per-localization fields are scalars; nothing else is.
             one = load_smite_2d(write_smd(dir, "one.mat", smite_smd(1)))
             @test sort(one.metadata["smite_per_localization_fields"]) == ["PValue", "ThreshFlag"]
+            # Older SMITE files hold some of these fields with one value per dataset. Saved with as
+            # many localizations as values, such a field would load as one per localization: it is
+            # dropped with a warning. With another count it is written as the file had it.
+            s = smite_smd(5); s["NDatasets"] = 2.0; s["PValue"] = col(Float32[0.9, 0.8])
+            a = load_smite_2d(write_smd(dir, "pd.mat", s))
+            @test !("PValue" in a.metadata["smite_per_localization_fields"])
+            two = SMLMCore.@filter(a, frame <= 2)
+            @test_logs (:warn, r"PValue not saved") match_mode = :any save_smite(two, dir, "pd2.mat")
+            @test !haskey(matread(joinpath(dir, "pd2.mat"))["SMD"], "PValue")
+            three = SMLMCore.@filter(a, frame <= 3)
+            save_smite(three, dir, "pd3.mat")
+            @test vec(matread(joinpath(dir, "pd3.mat"))["SMD"]["PValue"]) == Float32[0.9, 0.8]
+            # Metadata a user set on data not loaded from SMITE is written as given.
+            es = [Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5),
+                  Emitter2DFit{Float64}(2.0, 2.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5)]
+            mine = BasicSMLD(es, IdealCamera(1:64, 1:64, 0.1), 1, 1, Dict{String,Any}("PValue" => [0.5, 0.6]))
+            save_smite(mine, dir, "mine.mat")
+            @test vec(matread(joinpath(dir, "mine.mat"))["SMD"]["PValue"]) == [0.5, 0.6]
         end
     end
 
