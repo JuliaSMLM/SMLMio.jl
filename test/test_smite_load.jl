@@ -29,6 +29,14 @@ function smite_smd_3d(n::Int=3; kwargs...)
 end
 
 write_smd(dir, name, s) = (matwrite(joinpath(dir, name), Dict("SMD" => s)); SmiteSMD(dir, name))
+
+# An emitter type whose id is a string, for the save's row check.
+struct StrId <: SMLMCore.AbstractEmitter
+    x::Float64; y::Float64; photons::Float64; bg::Float64; σ_x::Float64; σ_y::Float64
+    σ_photons::Float64; σ_bg::Float64; frame::Int; dataset::Int; track_id::Int; id::String
+end
+StrId(e) = StrId(e.x, e.y, e.photons, e.bg, e.σ_x, e.σ_y, e.σ_photons, e.σ_bg, e.frame, e.dataset,
+                 e.track_id, string(e.id))
 quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
 
 @testset "SMITE loading" begin
@@ -389,6 +397,26 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             shifted = [E(e.x, e.y, e.photons, e.bg, e.σ_x, e.σ_y, e.σ_photons, e.σ_bg;
                          frame=e.frame + 6, dataset=e.dataset, track_id=e.track_id, id=e.id) for e in a.emitters]
             notsaved(SmiteSMLD{Float64,E}(shifted, a.camera, 12, 1, copy(md)), "shifted.mat")
+            # The loader's row record is two plain vectors (kept by any metadata checkpoint).
+            @test md["smite_row_frames"] isa Vector{Int} && md["smite_row_photons"] isa Vector{Float64}
+            # Without the row record nothing can be traced.
+            norec = copy(md); delete!(norec, "smite_row_frames"); delete!(norec, "smite_row_photons")
+            notsaved(SmiteSMLD{Float64,E}(a.emitters, a.camera, a.n_frames, a.n_datasets, norec), "norec.mat")
+            # An emitter type whose id is not an integer cannot name a row.
+            out = notsaved(BasicSMLD([StrId(e) for e in a.emitters], a.camera, a.n_frames, a.n_datasets, copy(md)), "strid.mat")
+            @test length(vec(out["X"])) == 6
+            # A field replaced since loading, no longer one value per file row, is dropped alone,
+            # with that reason; the other fields still follow their rows.
+            kept = SMLMCore.@filter(a, frame >= 5)
+            kept.metadata["LogLikelihood"] = [-50.0, -60.0]
+            @test_logs (:warn, r"LogLikelihood no longer holds one value per file row") match_mode = :any save_smite(kept, dir, "replaced.mat")
+            r = matread(joinpath(dir, "replaced.mat"))["SMD"]
+            @test !haskey(r, "LogLikelihood")
+            @test length(vec(r["PValue"])) == 2
+            # A 2D file filtered to no localizations saves as 2D.
+            none = SMLMCore.@filter(a, frame > 100)
+            save_smite(none, dir, "none.mat")
+            @test matread(joinpath(dir, "none.mat"))["SMD"]["NDims"] == 2
         end
     end
 

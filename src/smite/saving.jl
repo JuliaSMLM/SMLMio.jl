@@ -31,14 +31,17 @@ Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite
   with an `IdealCamera`.
 - Every metadata entry that is not an emitter column, except the loaders' own entries:
   `original_file`, `data_size`, `pixel_size`, `smite_defaulted_fields`,
-  `smite_per_localization_fields`, `smite_rows`, `complex_fields_removed`, `complex_fields`,
-  `original_emitter_count` and `removed_emitter_count`.
+  `smite_per_localization_fields`, `smite_row_frames`, `smite_row_photons`,
+  `complex_fields_removed`, `complex_fields`, `original_emitter_count` and
+  `removed_emitter_count`.
 - SMITE's per-localization fields a loader kept (`metadata["smite_per_localization_fields"]`:
   `PValue`, `LogLikelihood`, `PSFSigma`, ...) for the saved emitters' file rows, the row being
   each emitter's `id`, when every emitter is still the row its `id` names: the same frame and
-  photons the loader recorded for that row (`metadata["smite_rows"]`). Otherwise (frame-connected
-  or combined localizations, emitters joined from another file, changed frames or photons, ids
-  that are not rows) those fields are dropped with a warning.
+  photons the loader recorded for that row (`metadata["smite_row_frames"]`,
+  `metadata["smite_row_photons"]`). Otherwise (combined localizations such as frame
+  connection's combined output, emitters joined from another file, changed frames or photons,
+  ids that are not rows, no row record) those fields are dropped with a warning; so is a field
+  replaced since loading that no longer has one value per file row.
 - An optional field the file left empty (`ConnectID` before frame connection, ...), which the
   loader defaulted, back empty while it still holds only the default.
 
@@ -129,31 +132,40 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
 
     # SMITE's per-localization fields the loader kept (PValue, LogLikelihood, ...) are written for
     # these emitters' file rows, the row being each emitter's id, when every emitter is still its
-    # row: same frame and photons as the loader recorded for that row (smite_rows). Otherwise
-    # (frame-connected or combined localizations, emitters from another file, changed frames,
-    # ids that are not rows) those fields are dropped with a warning, never misplaced.
+    # row: the same frame and photons the loader recorded for that row (smite_row_frames,
+    # smite_row_photons). Otherwise (combined localizations, emitters from another file, changed
+    # frames or photons, ids that are not rows) those fields are dropped with a warning, never
+    # misplaced; so is a field replaced since loading that no longer has one value per row.
     perloc = filter(k -> haskey(md, k), get(md, "smite_per_localization_fields", String[]))
-    rec = get(md, "smite_rows", nothing)
+    rowframes = get(md, "smite_row_frames", nothing)
+    rowphotons = get(md, "smite_row_photons", nothing)
     rows = Int[]
-    traceable = isempty(perloc)
-    if !traceable && rec !== nothing &&
-       all(e -> hasproperty(e, :id) && hasproperty(e, :frame) && hasproperty(e, :photons), smld.emitters)
-        nrows = length(rec.frame)
-        traceable = all(k -> _smite_length(md[k]) == nrows, perloc) && all(smld.emitters) do e
-            r = e.id
-            r isa Integer && 1 <= r <= nrows && e.frame == rec.frame[r] && isequal(e.photons, rec.photons[r])
+    towrite = String[]
+    if !isempty(perloc) && (rowframes === nothing || rowphotons === nothing)
+        @warn("save_smite: $(join(perloc, ", ")) not saved: the metadata has no record of the file's rows")
+    elseif !isempty(perloc)
+        nrows = length(rowframes)
+        changed = filter(k -> _smite_length(md[k]) != nrows, perloc)
+        isempty(changed) || @warn("save_smite: $(join(changed, ", ")) no longer holds one value per " *
+                                  "file row ($nrows); not saved")
+        remaining = setdiff(perloc, changed)
+        isrow(e) = hasproperty(e, :id) && (r = e.id; r isa Integer && 1 <= r <= nrows &&
+                   e.frame == rowframes[r] && isequal(e.photons, rowphotons[r]))
+        if all(isrow, smld.emitters)
+            rows = Int[e.id for e in smld.emitters]
+            towrite = remaining
+        elseif !isempty(remaining)
+            @warn("save_smite: $(join(remaining, ", ")) not saved: these emitters are not all rows of the " *
+                  "file they were loaded from (combined localizations, another file's emitters, changed " *
+                  "frames or photons, or ids that are not rows)")
         end
-        traceable && (rows = Int[e.id for e in smld.emitters])
     end
-    traceable || @warn("save_smite: $(join(perloc, ", ")) not saved: these emitters are not all rows " *
-                       "of the file they were loaded from (frame-connected or combined localizations, " *
-                       "another file's emitters, changed frames or photons, or ids that are not rows)")
 
     # Add any additional fields from metadata, except the loaders' own entries
     for (key, value) in md
         (key in _SMITE_LOADER_KEYS || haskey(s, key)) && continue
         if key in perloc
-            traceable || continue
+            key in towrite || continue
             value = _smite_vec(value)[rows]
         end
         s[key] = value

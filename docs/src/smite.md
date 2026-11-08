@@ -58,8 +58,8 @@ smld.metadata["PValue"]        # one value per row of the file; emitter e is row
 Each emitter's `id` is its row in the file. The fields SMITE stacks per localization (its
 catSMD list: `PValue`, `LogLikelihood`, `PSFSigma`, `ThreshFlag`, `XBoxCorner`, ...) that the
 file holds with one value per row are listed in `metadata["smite_per_localization_fields"]`;
-index them by `id`, for example `smld.metadata["PValue"][e.id]`. `metadata["smite_rows"]`
-records each row's frame and photons. Some older SMITE files hold such a field with one value
+index them by `id`, for example `smld.metadata["PValue"][e.id]`. `metadata["smite_row_frames"]`
+and `metadata["smite_row_photons"]` record each row's frame and photons. Some older SMITE files hold such a field with one value
 per dataset; in a file with as many localizations as datasets that cannot be told apart.
 
 What the loaders do with fields SMITE leaves empty or writes in another shape:
@@ -97,13 +97,14 @@ save_smite(smld, "output/directory", "processed_Results.mat")
   camera whose pixels are not uniform and square is an error.
 - every metadata entry that is not an emitter column, except the loaders' own: `original_file`,
   `data_size`, `pixel_size`, `smite_defaulted_fields`, `smite_per_localization_fields`,
-  `smite_rows`, `complex_fields_removed`, `complex_fields`, `original_emitter_count` and
-  `removed_emitter_count`.
+  `smite_row_frames`, `smite_row_photons`, `complex_fields_removed`, `complex_fields`,
+  `original_emitter_count` and `removed_emitter_count`.
 - SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
   `PValue` still belongs to its localization. They are written only when every emitter is
-  still the file row its `id` names (the same frame and photons as when loaded); for
-  frame-connected or combined localizations, emitters joined from another file, or changed
-  frames, they are dropped with a warning.
+  still the file row its `id` names (the same frame and photons as when loaded); for combined
+  localizations (frame connection's combined output), emitters joined from another file, or
+  changed frames or photons, they are dropped with a warning. A field replaced since loading
+  that no longer has one value per file row is dropped with a warning too.
 - An optional field the file left empty, and nobody has set since loading, back empty (an
   empty `ConnectID` stays empty).
 

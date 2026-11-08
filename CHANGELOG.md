@@ -37,7 +37,7 @@ found by reading SMITE's code or by review, and each has a test that fails witho
   belonged to other localizations. The loaders list SMITE's per-localization fields (catSMD's
   list) in `metadata["smite_per_localization_fields"]` and record each row's frame and photons;
   `save_smite` writes those fields by each emitter's file row (`id`) when every emitter is still
-  its row, and otherwise (frame-connected or combined localizations, another file's emitters)
+  its row, and otherwise (combined localizations such as frame connection's combined output, another file's emitters)
   drops them with a warning.
 - `save_smite` wrote the loaders' own metadata (`original_file`, `complex_*`) into the file, and
   loading it back reported the earlier file's name and complex screening. The loaders' entries

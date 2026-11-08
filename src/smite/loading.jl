@@ -35,8 +35,8 @@ const _SMITE_OPTIONAL = ("Photons_SE" => NaN, "Bg_SE" => NaN, "DatasetNum" => 1,
 # Metadata entries the loaders make; save_smite never writes them, and a file field of one of
 # these names is not loaded.
 const _SMITE_LOADER_KEYS = ("original_file", "data_size", "pixel_size", "smite_defaulted_fields",
-    "smite_per_localization_fields", "smite_rows", "complex_fields_removed", "complex_fields",
-    "original_emitter_count", "removed_emitter_count")
+    "smite_per_localization_fields", "smite_row_frames", "smite_row_photons", "complex_fields_removed",
+    "complex_fields", "original_emitter_count", "removed_emitter_count")
 # The SMD fields SMITE stacks with one value per localization (catSMD.m's StackableFields).
 # Those the loaders keep in metadata, when they hold one value per localization, follow the
 # emitters through save_smite.
@@ -152,16 +152,16 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     setdiff!(used, defaulted)
     metadata = Dict{String,Any}(k => v for (k, v) in s if !(k in used || k in _SMITE_LOADER_KEYS))
     # SMITE's per-localization fields among them, with one value per file row: save_smite writes
-    # them for each emitter's row (its id) when every emitter is still that row, which smite_rows
-    # (each row's frame and photons) lets it check.
+    # them for each emitter's row (its id) when every emitter is still that row, which the row
+    # record (each row's frame and photons) lets it check.
     perloc = sort!([k for (k, v) in metadata if k in _SMITE_STACKABLE && _smite_length(v) == n])
     # The loaders' own entries, after the file's fields so that none of these is a file's.
     metadata["original_file"] = smd.filename
     metadata["data_size"] = data_size
     metadata["pixel_size"] = px
     metadata["smite_per_localization_fields"] = perloc
-    metadata["smite_rows"] = (frame=Int[Int(v) for v in cols["FrameNum"]],
-                              photons=Float64[Float64(real(v)) for v in cols["Photons"]])
+    metadata["smite_row_frames"] = Int[Int(v) for v in cols["FrameNum"]]
+    metadata["smite_row_photons"] = Float64[Float64(real(v)) for v in cols["Photons"]]
     isempty(defaulted) || (metadata["smite_defaulted_fields"] = defaulted)
     if has_complex
         metadata["complex_fields_removed"] = true
@@ -198,9 +198,9 @@ SmiteSMLD containing 2D localizations
 - Every other SMD field is kept in the metadata as SMITE wrote it (for example `DriftX` in pixels).
   Each emitter's `id` is its row in the file. `metadata["smite_per_localization_fields"]` lists
   the kept fields SMITE stacks per localization (its catSMD list: `PValue`, `LogLikelihood`,
-  `PSFSigma`, ...) that hold one value per row; `metadata["smite_rows"]` records each row's frame
-  and photons, by which `save_smite` checks that an emitter is still its row before writing
-  those fields back by row. Some older SMITE files hold such a field with one value per
+  `PSFSigma`, ...) that hold one value per row; `metadata["smite_row_frames"]` and
+  `metadata["smite_row_photons"]` record each row's frame and photons, by which `save_smite`
+  checks that an emitter is still its row before writing those fields back by row. Some older SMITE files hold such a field with one value per
   dataset; in a file with as many localizations as datasets that cannot be told apart.
 - On a file with `NDims` 3, warns that `Z` is left out (it stays in the metadata).
 - Emitters with non-zero imaginary components are excluded with a warning.
