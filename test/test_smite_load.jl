@@ -150,6 +150,18 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test smld.emitters[1] isa Emitter2DFit
             @test haskey(smld.metadata, "Z")
             @test_logs load_smite_2d(write_smd(dir, "two.mat", smite_smd(3)))   # 2D: no warning
+            # Saved, the Z kept in metadata goes back with its rows, and the file says 3D.
+            save_smite(smld, dir, "three-saved.mat")
+            saved = matread(joinpath(dir, "three-saved.mat"))["SMD"]
+            @test saved["NDims"] == 3
+            @test load_smite_3d(SmiteSMD(dir, "three-saved.mat")).emitters[2].z ≈ 0.0 atol = 1e-6
+        end
+    end
+
+    @testset "a required field that is not numeric" begin
+        mktempdir() do dir
+            s = smite_smd(2); s["X"] = "not a number"
+            @test_throws r"X is not numeric" load_smite_2d(write_smd(dir, "text.mat", s))
         end
     end
 
@@ -420,6 +432,11 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             # A file field that shares a loader key's name does not replace the loader's value.
             s = smite_smd(2); s["original_file"] = "elsewhere.mat"
             @test load_smite_2d(write_smd(dir, "C.mat", s)).metadata["original_file"] == "C.mat"
+            # Nor does a file field named like an entry the loader sets only sometimes.
+            s = smite_smd(2); s["complex_fields_removed"] = 1.0; s["smite_defaulted_fields"] = "ConnectID"
+            d = load_smite_2d(write_smd(dir, "D.mat", s))
+            @test !haskey(d.metadata, "complex_fields_removed")
+            @test !haskey(d.metadata, "smite_defaulted_fields")
         end
     end
 

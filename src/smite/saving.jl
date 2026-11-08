@@ -151,6 +151,9 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
         end
         s[key] = value
     end
+    # A 3D file loaded as 2D keeps Z in metadata, written back above for each emitter: say 3D
+    zcols === nothing && !isempty(smld.emitters) && haskey(s, "Z") &&
+        _smite_length(s["Z"]) == length(smld.emitters) && (s["NDims"] = 3.0)
     
     # Save to file
     matwrite(joinpath(filepath, filename), Dict("SMD" => s))

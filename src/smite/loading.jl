@@ -61,6 +61,7 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     for key in (three_d ? vcat(_SMITE_REQUIRED, _SMITE_REQUIRED_3D) : _SMITE_REQUIRED)
         v = get(s, key, nothing)
         v === nothing && throw(ArgumentError("$where has no $key field"))
+        v isa Union{Number,AbstractArray{<:Number}} || throw(ArgumentError("$where: $key is not numeric"))
         _smite_length(v) == n || throw(ArgumentError(
             "$where: $key holds $(_smite_length(v)) values for $n localizations"))
         cols[key] = _smite_vec(v)
