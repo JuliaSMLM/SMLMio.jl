@@ -30,14 +30,14 @@ end
 
 write_smd(dir, name, s) = (matwrite(joinpath(dir, name), Dict("SMD" => s)); SmiteSMD(dir, name))
 
-# An emitter type whose id is a string, for the save's row check.
-# An emitter type with no id at all.
+# An emitter type with no id at all, for the save's row check.
 struct NoId <: SMLMCore.AbstractEmitter
     x::Float64; y::Float64; photons::Float64; bg::Float64; σ_x::Float64; σ_y::Float64
     σ_photons::Float64; σ_bg::Float64; frame::Int; dataset::Int; track_id::Int
 end
 NoId(e) = NoId(e.x, e.y, e.photons, e.bg, e.σ_x, e.σ_y, e.σ_photons, e.σ_bg, e.frame, e.dataset, e.track_id)
 
+# An emitter type whose id is a string, for the save's row check.
 struct StrId <: SMLMCore.AbstractEmitter
     x::Float64; y::Float64; photons::Float64; bg::Float64; σ_x::Float64; σ_y::Float64
     σ_photons::Float64; σ_bg::Float64; frame::Int; dataset::Int; track_id::Int; id::String
@@ -473,8 +473,16 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             a = load_smite_2d(write_smd(dir, "pd.mat", s))
             @test !("PValue" in a.metadata["smite_per_localization_fields"])
             two = SMLMCore.@filter(a, frame <= 2)
-            @test_logs (:warn, r"PValue not saved") match_mode = :any save_smite(two, dir, "pd2.mat")
+            @test_logs (:warn, r"PValue not saved: SMITE stores these per localization, they are not listed in smite_per_localization_fields") match_mode = :any save_smite(two, dir, "pd2.mat")
             @test !haskey(matread(joinpath(dir, "pd2.mat"))["SMD"], "PValue")
+            # A stacked field added after loading, as many values as rows and saved localizations,
+            # is dropped with the same (true) reason; listed, it is saved by row.
+            b = load_smite_2d(write_smd(dir, "pd5.mat", smite_smd(5)))
+            b.metadata["PSFSigma"] = [1.1, 1.2, 1.3, 1.4, 1.5]
+            @test_logs (:warn, r"PSFSigma not saved: .*not listed in smite_per_localization_fields") match_mode = :any save_smite(b, dir, "added.mat")
+            push!(b.metadata["smite_per_localization_fields"], "PSFSigma")
+            save_smite(SMLMCore.@filter(b, frame >= 4), dir, "listed.mat")
+            @test vec(matread(joinpath(dir, "listed.mat"))["SMD"]["PSFSigma"]) == [1.4, 1.5]
             three = SMLMCore.@filter(a, frame <= 3)
             save_smite(three, dir, "pd3.mat")
             @test vec(matread(joinpath(dir, "pd3.mat"))["SMD"]["PValue"]) == Float32[0.9, 0.8]

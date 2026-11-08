@@ -107,11 +107,12 @@ save_smite(smld, "output/directory", "processed_Results.mat")
   localizations (frame connection's combined output), emitters joined from another file, or
   changed frames or photons, they are dropped with a warning. A field replaced since loading
   that no longer has one value per file row is dropped with a warning too.
-- a field SMITE stacks per localization that does not hold one value per row of the loaded file
-  (often one value per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files;
-  or one added after loading) as it is, unless the saved localizations are as many as its
+- a field SMITE stacks per localization that is not listed in
+  `metadata["smite_per_localization_fields"]` (the file held it with other than one value per
+  row, often one per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files; or
+  it was added after loading) as it is, unless the saved localizations are as many as its
   values: then a load would take it for one value per localization, and it is dropped with a
-  warning.
+  warning. To save such a field by row, list it there with one value per file row.
 - An optional field the file left empty, and nobody has set since loading, back empty (an
   empty `ConnectID` stays empty). A `Photons_SE` or `Bg_SE` the file held with one value per
   dataset is saved as the `NaN` it loaded as; its per-dataset values are not saved.

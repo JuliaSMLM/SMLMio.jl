@@ -44,13 +44,15 @@ Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite
   replaced since loading that no longer has one value per file row. A listed field edited or
   replaced after loading must still hold one value per file row, in file-row order (index it by
   `id`): it is written by row, so values set in another order come out next to other
-  localizations. The loaders' `smite_*` entries are what tell `save_smite` this; deleting them
-  makes it write those fields as ordinary metadata.
-- A field SMITE stacks per localization that does not hold one value per row of the loaded file
-  (often one value per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files;
-  or one added after loading) as it is, unless the saved localizations are as many as its
+  localizations. `metadata["smite_per_localization_fields"]` is what tells `save_smite` this;
+  deleting it makes it write those fields as ordinary metadata.
+- A field SMITE stacks per localization that is not listed in
+  `metadata["smite_per_localization_fields"]` (the file held it with other than one value per
+  row, often one per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files; or
+  it was added after loading) as it is, unless the saved localizations are as many as its
   values: then a load would take it for one value per localization, and it is dropped with a
-  warning. This applies to data loaded from SMITE; metadata on other data is written as given.
+  warning. To save such a field per localization, list it there with one value per file row.
+  This applies to data loaded from SMITE; metadata on other data is written as given.
 - An optional field the file left empty (`ConnectID` before frame connection, ...), which the
   loader defaulted, back empty while it still holds only the default. A `Photons_SE` or `Bg_SE`
   the file held with one value per dataset is saved as the `NaN` it loaded as; its per-dataset
@@ -172,10 +174,11 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
         end
     end
 
-    # Add any additional fields from metadata, except the loaders' own entries. A field SMITE
-    # stacks per localization that the loaded file held otherwise (often one value per dataset)
+    # Add any additional fields from metadata, except the loaders' own entries. For data loaded
+    # from SMITE, a field SMITE stacks per localization that is not listed as one value per file
+    # row (the file held it otherwise, often one value per dataset, or it was added after loading)
     # is dropped when the saved localizations are as many as its values, since a load would take
-    # it for one value per localization; with another count it is written as the file had it.
+    # it for one value per localization; with another count it is written as it is.
     loaded = haskey(md, "smite_per_localization_fields")
     nsaved = length(smld.emitters)
     ambiguous = String[]
@@ -191,8 +194,9 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
         s[key] = value
     end
     isempty(ambiguous) || @warn("save_smite: $(join(sort!(ambiguous), ", ")) not saved: SMITE stores these " *
-        "per localization, but they do not hold one value per row of the loaded file (often one per " *
-        "dataset), and as many values as saved localizations would load as one per localization")
+        "per localization, they are not listed in smite_per_localization_fields as one value per file " *
+        "row, and with as many values as saved localizations a load would take them for one value per " *
+        "localization; list a field there, with one value per file row, to save it by row")
     # A 3D file loaded as 2D keeps Z in metadata, written back above for each emitter: say 3D
     zcols === nothing && !isempty(smld.emitters) && haskey(s, "Z") &&
         _smite_length(s["Z"]) == length(smld.emitters) && (s["NDims"] = 3.0)
