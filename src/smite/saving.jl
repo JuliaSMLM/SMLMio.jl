@@ -99,13 +99,37 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     s["PixelSize"] = Float64(px)
     s["NDims"] = zcols === nothing ? 2.0 : 3.0
 
+    md = smld.metadata
+
+    # Optional fields the loader filled with defaults and that still hold only the default go back
+    # as the file had them (SMITE treats an empty ConnectID differently from zeros).
+    defaulted = get(md, "smite_defaulted_fields", String[])
+    for (key, default) in _SMITE_OPTIONAL
+        key in defaulted && haskey(md, key) && all(v -> isequal(v, default), s[key]) && (s[key] = md[key])
+    end
+
+    # Fields the loader kept with one value per file row (PValue, LogLikelihood, ...) are written
+    # for these emitters' rows, the file row being each emitter's id. Combined data sets, or ids
+    # that are not distinct file rows, cannot be traced: those fields are dropped with a warning.
+    perloc = filter(k -> haskey(md, k), get(md, "smite_per_localization_fields", String[]))
+    rows = Int[]
+    traceable = isempty(perloc)
+    if !traceable && !haskey(md, "concatenated_from") && !haskey(md, "merged_from") &&
+       all(e -> hasproperty(e, :id), smld.emitters)
+        rows = Int[e.id for e in smld.emitters]
+        traceable = allunique(rows) && all(k -> all(r -> 1 <= r <= _smite_length(md[k]), rows), perloc)
+    end
+    traceable || @warn("save_smite: $(join(perloc, ", ")) not saved: their rows cannot be traced to " *
+                       "these emitters (combined data sets, or emitter ids that are not file rows)")
+
     # Add any additional fields from metadata, except the loaders' own entries
-    # (data_size and pixel_size repeat XSize, YSize and PixelSize)
-    for (key, value) in smld.metadata
-        key in ("data_size", "pixel_size", "smite_defaulted_fields") && continue
-        if !haskey(s, key)
-            s[key] = value
+    for (key, value) in md
+        (key in _SMITE_LOADER_KEYS || haskey(s, key)) && continue
+        if key in perloc
+            traceable || continue
+            value = _smite_vec(value)[rows]
         end
+        s[key] = value
     end
     
     # Save to file

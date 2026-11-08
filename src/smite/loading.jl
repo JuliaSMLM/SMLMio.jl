@@ -86,6 +86,22 @@ const _SMITE_REQUIRED_3D = ["Z", "Z_SE"]
 # older SMITE versions wrote with one value per dataset (Photons_SE, Bg_SE). Such a field loads as
 # its default here, and its raw value stays in the metadata.
 const _SMITE_OPTIONAL = ("Photons_SE" => NaN, "Bg_SE" => NaN, "DatasetNum" => 1, "ConnectID" => 0)
+# Metadata entries the loaders make; save_smite never writes them, and a file field of one of
+# these names is not loaded.
+const _SMITE_LOADER_KEYS = ("original_file", "data_size", "pixel_size", "smite_defaulted_fields",
+    "smite_per_localization_fields", "complex_fields_removed", "complex_fields",
+    "original_emitter_count", "removed_emitter_count")
+# SMITE's SMD fields that hold one value for the whole file.
+const _SMITE_SCALARS = ("NDims", "NFrames", "NDatasets", "FrameRate", "PixelSize", "XSize", "YSize",
+    "ZSize", "ZOffset", "IsTransformed", "RegError")
+
+# A field with one value per localization: a vector (or n x 1 or 1 x n) of n values for n >= 2;
+# for a single localization, which MAT reads as scalars, a number that is not one of SMITE's
+# whole-file fields. With n equal to NDatasets, a per-dataset field cannot be told apart.
+function _smite_per_localization(key, v, n)
+    n >= 2 && return v isa AbstractArray && ndims(v) <= 2 && length(v) == n && (v isa AbstractVector || 1 in size(v))
+    return n == 1 && v isa Number && !(key in _SMITE_SCALARS)
+end
 
 # Shared body of load_smite_2d and load_smite_3d.
 function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
@@ -183,24 +199,25 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     data_size = [Int(ysize), Int(xsize)]
     zsize = _smite_scalar(s, "ZSize")   # SMITE's SMD has no ZSize; kept when a file has one
     three_d && zsize !== nothing && push!(data_size, Int(zsize))
-    metadata = Dict{String,Any}(
-        "original_file" => smd.filename,
-        "data_size" => data_size,
-        "pixel_size" => px
-    )
+    # Every other SMITE field, and the raw value of an optional field loaded as its default
+    used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"],
+                    three_d ? ["ZSize"] : String[]))
+    setdiff!(used, defaulted)
+    metadata = Dict{String,Any}(k => v for (k, v) in s if !(k in used || k in _SMITE_LOADER_KEYS))
+    # The loaders' own entries, after the file's fields so that none of these is a file's.
+    # smite_per_localization_fields lists the fields kept above that hold one value per file row,
+    # which save_smite writes back by each emitter's row (its id).
+    metadata["original_file"] = smd.filename
+    metadata["data_size"] = data_size
+    metadata["pixel_size"] = px
+    metadata["smite_per_localization_fields"] =
+        sort!([k for (k, v) in metadata if _smite_per_localization(k, v, n)])
     isempty(defaulted) || (metadata["smite_defaulted_fields"] = defaulted)
     if has_complex
         metadata["complex_fields_removed"] = true
         metadata["complex_fields"] = collect(keys(complex_indices))
         metadata["original_emitter_count"] = n
         metadata["removed_emitter_count"] = n - length(valid_indices)
-    end
-    # Every other SMITE field, and the raw value of an optional field loaded as its default
-    used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"],
-                    three_d ? ["ZSize"] : String[]))
-    setdiff!(used, defaulted)
-    for key in keys(s)
-        key in used || (metadata[key] = s[key])
     end
 
     SmiteSMLD{Float64,E}(emitters, camera, Int(nframes), Int(ndatasets), metadata)

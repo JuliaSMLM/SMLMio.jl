@@ -264,6 +264,82 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
+    @testset "save_smite keeps SMITE's other fields with their localizations" begin
+        mktempdir() do dir
+            # Per-localization fields kept in metadata (PValue, LogLikelihood, ...) follow the
+            # emitters through a filter and through complex screening, by the file row in `id`.
+            s = smite_smd(5)
+            s["PValue"] = col(Float32[0.1, 0.2, 0.3, 0.4, 0.5])
+            s["LogLikelihood"] = col([-1.0, -2.0, -3.0, -4.0, -5.0])
+            a = load_smite_2d(write_smd(dir, "a.mat", s))
+            @test sort(a.metadata["smite_per_localization_fields"]) == ["LogLikelihood", "PValue", "ThreshFlag"]
+            kept = SMLMCore.@filter(a, frame >= 3)        # rows 3, 4, 5
+            save_smite(kept, dir, "kept.mat")
+            k = matread(joinpath(dir, "kept.mat"))["SMD"]
+            @test vec(k["PValue"]) == Float32[0.3, 0.4, 0.5]
+            @test vec(k["LogLikelihood"]) == [-3.0, -4.0, -5.0]
+            @test length(vec(k["ThreshFlag"])) == 3
+            @test vec(k["X"]) ≈ vec(s["X"])[3:5]
+            # Complex screening drops row 2; the saved fields drop it too.
+            c = copy(s)
+            c["X"] = col(ComplexF32[10, 17.5 + 1im, 25, 32.5, 40])
+            b = quiet(() -> load_smite_2d(write_smd(dir, "complex.mat", c)))
+            @test [e.id for e in b.emitters] == [1, 3, 4, 5]
+            save_smite(b, dir, "screened.mat")
+            sc = matread(joinpath(dir, "screened.mat"))["SMD"]
+            @test vec(sc["PValue"]) == Float32[0.1, 0.3, 0.4, 0.5]
+            # Data sets combined from several files cannot be traced to one file's rows: the fields
+            # are dropped with a warning, never written next to the wrong localizations.
+            both = SMLMCore.cat_smld(a, kept)
+            @test_logs (:warn, r"not saved") match_mode = :any save_smite(both, dir, "both.mat")
+            bo = matread(joinpath(dir, "both.mat"))["SMD"]
+            @test !haskey(bo, "PValue") && !haskey(bo, "LogLikelihood")
+            @test length(vec(bo["X"])) == 8
+        end
+    end
+
+    @testset "save_smite skips the loaders' own metadata" begin
+        mktempdir() do dir
+            # Loading B must describe B, not the file B was saved from.
+            c = smite_smd(3)
+            c["X"] = col(ComplexF32[10, 25 + 1im, 40])
+            a = quiet(() -> load_smite_2d(write_smd(dir, "A.mat", c)))
+            @test a.metadata["complex_fields_removed"] == true
+            save_smite(a, dir, "B.mat")
+            saved = matread(joinpath(dir, "B.mat"))["SMD"]
+            for k in ("original_file", "complex_fields_removed", "complex_fields", "original_emitter_count",
+                      "removed_emitter_count", "smite_per_localization_fields")
+                @test !haskey(saved, k)
+            end
+            b = load_smite_2d(SmiteSMD(dir, "B.mat"))
+            @test b.metadata["original_file"] == "B.mat"
+            @test !haskey(b.metadata, "complex_fields_removed")
+            @test !occursin("Complex", sprint(show, MIME("text/plain"), b))
+            # A file field that shares a loader key's name does not replace the loader's value.
+            s = smite_smd(2); s["original_file"] = "elsewhere.mat"
+            @test load_smite_2d(write_smd(dir, "C.mat", s)).metadata["original_file"] == "C.mat"
+        end
+    end
+
+    @testset "save_smite writes untouched defaulted fields back as SMITE had them" begin
+        mktempdir() do dir
+            # SMITE treats an empty ConnectID (no frame connection) differently from zeros.
+            s = smite_smd(3); s["ConnectID"] = zeros(UInt32, 0, 0)
+            s["NDatasets"] = 2.0; s["Photons_SE"] = col(Float32[31, 32])
+            a = quiet(() -> load_smite_2d(write_smd(dir, "a.mat", s)))
+            save_smite(a, dir, "b.mat")
+            saved = matread(joinpath(dir, "b.mat"))["SMD"]
+            @test isempty(saved["ConnectID"])
+            @test vec(saved["Photons_SE"]) == Float32[31, 32]
+            b = quiet(() -> load_smite_2d(SmiteSMD(dir, "b.mat")))
+            @test b.metadata["smite_defaulted_fields"] == a.metadata["smite_defaulted_fields"]
+            # Values set since loading are written.
+            a.emitters[1].track_id = 7
+            save_smite(a, dir, "c.mat")
+            @test vec(matread(joinpath(dir, "c.mat"))["SMD"]["ConnectID"]) == [7.0, 0.0, 0.0]
+        end
+    end
+
     @testset "save_smite cameras and number types" begin
         mktempdir() do dir
             # Float32 cameras, whose edges carry Float32 rounding, save and load back.
