@@ -81,6 +81,8 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
             v !== nothing && _smite_length(v) > 0 && push!(mismatched, key)
         end
     end
+    !three_d && _smite_scalar(s, "NDims") == 3 && n > 0 && _smite_length(get(s, "Z", nothing)) == n &&
+        @warn("$where has NDims 3; load_smite_2d leaves out Z (kept in metadata), load_smite_3d loads it")
     isempty(mismatched) || @warn("$where: $(join(mismatched, ", ")) do not hold one value per " *
         "localization ($n); loaded as their defaults (NaN, or 1 for DatasetNum, 0 for ConnectID), " *
         "raw values kept in metadata")
@@ -92,7 +94,8 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
             "$where has no PixelSize; pass pixel_size (microns per pixel) to load it"))
         Float64(pixel_size)
     else
-        pixel_size === nothing || isapprox(pixel_size, file_px) || throw(ArgumentError(
+        # rtol 1e-6: a PixelSize stored as MATLAB single matches the decimal it was written from
+        pixel_size === nothing || isapprox(pixel_size, file_px; rtol=1e-6) || throw(ArgumentError(
             "$where has PixelSize $file_px µm, but pixel_size = $pixel_size was passed"))
         file_px
     end

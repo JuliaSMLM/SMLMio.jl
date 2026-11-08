@@ -135,6 +135,21 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test_throws r"PixelSize 0.0978 µm, but pixel_size = 0.1" load_smite_2d(smd; pixel_size=0.1)
             s = smite_smd(3); delete!(s, "PixelSize")
             @test_throws r"not positive" load_smite_2d(write_smd(dir, "pxneg.mat", s); pixel_size=-0.1)
+            # A single-precision PixelSize matches the decimal it was written from.
+            smd = write_smd(dir, "px32.mat", smite_smd(3; pixel_size=0.0978f0))
+            @test load_smite_2d(smd; pixel_size=0.0978).camera.pixel_edges_x[2] ≈ 0.0978 rtol = 1e-6
+            @test_throws r"but pixel_size = 0.1" load_smite_2d(smd; pixel_size=0.1)
+        end
+    end
+
+    @testset "load_smite_2d on a 3D file says it leaves out Z" begin
+        mktempdir() do dir
+            smd = write_smd(dir, "three.mat", smite_smd_3d(3))
+            @test_logs (:warn, r"NDims 3.*load_smite_3d") load_smite_2d(smd)
+            smld = quiet(() -> load_smite_2d(smd))
+            @test smld.emitters[1] isa Emitter2DFit
+            @test haskey(smld.metadata, "Z")
+            @test_logs load_smite_2d(write_smd(dir, "two.mat", smite_smd(3)))   # 2D: no warning
         end
     end
 
