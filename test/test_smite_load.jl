@@ -8,7 +8,7 @@ col(v) = reshape(collect(v), :, 1)
 
 function smite_smd(n::Int=3; pixel_size=0.1, xsize=64.0, ysize=64.0)
     return Dict{String,Any}(
-        "X" => col(Float32.(range(10, 40; length=n))), "Y" => col(Float32.(range(5, 50; length=n))),
+        "X" => col(Float32.(10 .+ 30 .* (0:n-1) ./ max(n - 1, 1))), "Y" => col(Float32.(5 .+ 45 .* (0:n-1) ./ max(n - 1, 1))),
         "X_SE" => col(fill(0.2f0, n)), "Y_SE" => col(fill(0.3f0, n)),
         "Photons" => col(fill(1000.0f0, n)), "Bg" => col(fill(5.0f0, n)),
         "Photons_SE" => col(fill(30.0f0, n)), "Bg_SE" => col(fill(0.5f0, n)),
@@ -22,7 +22,7 @@ end
 # The same with SMITE's 3D columns: Z and Z_SE in microns, NDims 3.
 function smite_smd_3d(n::Int=3; kwargs...)
     s = smite_smd(n; kwargs...)
-    s["Z"] = col(Float32.(range(-0.4, 0.4; length=n)))
+    s["Z"] = col(Float32.(-0.4 .+ 0.8 .* (0:n-1) ./ max(n - 1, 1)))
     s["Z_SE"] = col(fill(0.04f0, n))
     s["NDims"] = 3.0
     return s
@@ -63,6 +63,69 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test smld.emitters[1].y ≈ cy[1]
             @test smld.emitters[2].x ≈ cx[end]
             @test smld.emitters[2].y ≈ cy[end]
+        end
+    end
+
+    @testset "fields without one value per localization" begin
+        mktempdir() do dir
+            # Older SMITE versions wrote Photons_SE and Bg_SE with one value per dataset:
+            # they load as NaN with a warning, raw values kept in metadata.
+            s = smite_smd(5)
+            s["NDatasets"] = 2.0
+            s["Photons_SE"] = col(Float32[31, 32]); s["Bg_SE"] = col(Float32[0.6, 0.7])
+            smd = write_smd(dir, "perdataset.mat", s)
+            @test_logs (:warn, r"Photons_SE, Bg_SE do not hold one value per localization") load_smite_2d(smd)
+            smld = quiet(() -> load_smite_2d(smd))
+            @test length(smld.emitters) == 5
+            @test all(e -> isnan(e.σ_photons) && isnan(e.σ_bg), smld.emitters)
+            @test vec(smld.metadata["Photons_SE"]) == Float32[31, 32]
+            @test vec(smld.metadata["Bg_SE"]) == Float32[0.6, 0.7]
+            @test smld.metadata["smite_defaulted_fields"] == ["Photons_SE", "Bg_SE"]
+            @test [e.photons for e in smld.emitters] ≈ vec(s["Photons"])
+            # Empty (not computed) Photons_SE and Bg_SE: NaN, no warning.
+            s = smite_smd(4)
+            s["Photons_SE"] = zeros(0, 0); s["Bg_SE"] = zeros(0, 0)
+            smld = @test_logs load_smite_2d(write_smd(dir, "emptyse.mat", s))
+            @test all(e -> isnan(e.σ_photons) && isnan(e.σ_bg), smld.emitters)
+            # ConnectID is empty before frame connection: track_id 0, no warning.
+            s = smite_smd(4)
+            s["ConnectID"] = zeros(UInt32, 0, 0)
+            smld = @test_logs load_smite_2d(write_smd(dir, "noconnect.mat", s))
+            @test [e.track_id for e in smld.emitters] == zeros(Int, 4)
+            @test smld.metadata["smite_defaulted_fields"] == ["ConnectID"]
+            # No DatasetNum: dataset 1.
+            s = smite_smd(3)
+            delete!(s, "DatasetNum")
+            smld = load_smite_2d(write_smd(dir, "nodataset.mat", s))
+            @test [e.dataset for e in smld.emitters] == [1, 1, 1]
+            # The same in 3D.
+            s = smite_smd_3d(3)
+            s["ZSize"] = 1.0
+            s["ConnectID"] = zeros(UInt32, 0, 0); s["Bg_SE"] = zeros(0, 0)
+            smld = load_smite_3d(write_smd(dir, "noconnect3d.mat", s))
+            @test [e.track_id for e in smld.emitters] == [0, 0, 0]
+            @test all(e -> isnan(e.σ_bg), smld.emitters)
+            # A required field of the wrong length is an error naming it.
+            s = smite_smd(3)
+            s["Photons"] = col(Float32[1000, 1000])
+            @test_throws r"Photons holds 2 values for 3 localizations" load_smite_2d(write_smd(dir, "short.mat", s))
+        end
+    end
+
+    @testset "row vectors and a single localization" begin
+        mktempdir() do dir
+            # Real files store columns; an SMD assembled in MATLAB may hold rows.
+            s = smite_smd(4)
+            for (k, v) in s
+                v isa AbstractMatrix && size(v, 2) == 1 && size(v, 1) == 4 && (s[k] = permutedims(v))
+            end
+            smld = load_smite_2d(write_smd(dir, "rows.mat", s))
+            @test length(smld.emitters) == 4
+            @test [e.frame for e in smld.emitters] == 1:4
+            # One localization: MAT reads each column as a scalar.
+            smld = load_smite_2d(write_smd(dir, "one.mat", smite_smd(1)))
+            @test length(smld.emitters) == 1
+            @test smld.emitters[1].x ≈ (10 - 0.5) * 0.1
         end
     end
 
