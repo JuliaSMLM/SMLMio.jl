@@ -23,20 +23,21 @@ Pkg.add(url="https://github.com/JuliaSMLM/SMLMio.jl")
 
 ## Quick start
 
-Save a small dataset to a temporary folder. Positions and their uncertainties are in microns.
+Save a small dataset as a SMITE file and load it back. Positions and their uncertainties are in
+microns; the file holds them in SMITE's pixels.
 
 ```@example quickstart
 using SMLMio
-using SMLMCore: IdealCamera, Emitter2DFit
+using SMLMCore: IdealCamera, Emitter2DFit, BasicSMLD
 
 camera = IdealCamera(1:64, 1:64, 0.1) # pixel size in microns
 emitters = [Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)]
-smld = SmiteSMLD{Float64,Emitter2DFit{Float64}}(
-    emitters, camera, 1, 1, Dict{String,Any}(),
-)
+smld = BasicSMLD(emitters, camera, 1, 1, Dict{String,Any}())
 mktempdir() do dir
     save_smite(smld, dir, "localizations.mat")
-    println(isfile(joinpath(dir, "localizations.mat")))
+    loaded = load_smite_2d(SmiteSMD(dir, "localizations.mat"))
+    e = loaded.emitters[1]
+    println((e.x, e.y))   # microns, as saved
 end
 ```
 
