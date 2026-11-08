@@ -88,7 +88,7 @@ const _SMITE_REQUIRED_3D = ["Z", "Z_SE"]
 const _SMITE_OPTIONAL = ("Photons_SE" => NaN, "Bg_SE" => NaN, "DatasetNum" => 1, "ConnectID" => 0)
 
 # Shared body of load_smite_2d and load_smite_3d.
-function _load_smite(smd::SmiteSMD, three_d::Bool)
+function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     p = joinpath(smd.filepath, smd.filename)
     file = matopen(p)
     s = read(file, smd.varname)
@@ -124,7 +124,17 @@ function _load_smite(smd::SmiteSMD, three_d::Bool)
         "raw values kept in metadata")
 
     # Pixel size (microns) and image size
-    px = get(s, "PixelSize", 0.1) # default 0.1 microns if not specified
+    file_px = _smite_scalar(s, "PixelSize")
+    px = if file_px === nothing
+        pixel_size === nothing && throw(ArgumentError(
+            "$where has no PixelSize; pass pixel_size (microns per pixel) to load it"))
+        Float64(pixel_size)
+    else
+        pixel_size === nothing || isapprox(pixel_size, file_px) || throw(ArgumentError(
+            "$where has PixelSize $file_px µm, but pixel_size = $pixel_size was passed"))
+        file_px
+    end
+    px > 0 || throw(ArgumentError("$where: pixel size $px is not positive"))
     xsize, ysize = s["XSize"], s["YSize"]
     nframes, ndatasets = s["NFrames"], s["NDatasets"]
     camera = IdealCamera(1:Int(xsize), 1:Int(ysize), px)
@@ -189,7 +199,7 @@ function _load_smite(smd::SmiteSMD, three_d::Bool)
 end
 
 """
-    load_smite_2d(smd::SmiteSMD)
+    load_smite_2d(smd::SmiteSMD; pixel_size=nothing)
 
 Load a 2D SMITE SMD .mat file into a `SmiteSMLD` of `Emitter2DFit{Float64}`.
 
@@ -199,25 +209,27 @@ They load in microns from the camera's corner: `x = (X - 0.5) * PixelSize`,
 
 # Arguments
 - `smd::SmiteSMD`: SmiteSMD object specifying the file to load
+- `pixel_size`: microns per pixel, needed only when the file has no `PixelSize` (absent or
+  empty); when the file has one, a different `pixel_size` is an error
 
 # Returns
 SmiteSMLD containing 2D localizations
 
 # Notes
-- If PixelSize is not specified in the file, defaults to 0.1 microns
 - `Photons_SE` and `Bg_SE` load as `NaN`, `DatasetNum` as 1 and `ConnectID` as 0 when the file
   leaves them empty (SMITE leaves `ConnectID` empty before frame connection) or holds them with
   one value per dataset (some older SMITE versions); their raw values stay in the metadata, and
   `metadata["smite_defaulted_fields"]` lists them. A non-empty field of the wrong length warns.
 - Every other SMD field is kept in the metadata as SMITE wrote it (for example `DriftX` in pixels).
 - Emitters with non-zero imaginary components are excluded with a warning.
-- Throws an `ArgumentError` when a required field (`X`, `Y`, `Photons`, `Bg`, `X_SE`, `Y_SE`,
-  `FrameNum`) does not hold one value per localization.
+- Throws an `ArgumentError` when the file has no pixel size and none is passed, or when a
+  required field (`X`, `Y`, `Photons`, `Bg`, `X_SE`, `Y_SE`, `FrameNum`) does not hold one value
+  per localization.
 """
-load_smite_2d(smd::SmiteSMD) = _load_smite(smd, false)
+load_smite_2d(smd::SmiteSMD; pixel_size=nothing) = _load_smite(smd, false, pixel_size)
 
 """
-    load_smite_3d(smd::SmiteSMD)
+    load_smite_3d(smd::SmiteSMD; pixel_size=nothing)
 
 Load a 3D SMITE SMD .mat file into a `SmiteSMLD` of `Emitter3DFit{Float64}`.
 
@@ -226,8 +238,9 @@ unchanged. The file also needs `Z` and `Z_SE` with one value per localization.
 
 # Arguments
 - `smd::SmiteSMD`: SmiteSMD object specifying the file to load
+- `pixel_size`: microns per pixel, needed only when the file has no `PixelSize`
 
 # Returns
 SmiteSMLD containing 3D localizations
 """
-load_smite_3d(smd::SmiteSMD) = _load_smite(smd, true)
+load_smite_3d(smd::SmiteSMD; pixel_size=nothing) = _load_smite(smd, true, pixel_size)

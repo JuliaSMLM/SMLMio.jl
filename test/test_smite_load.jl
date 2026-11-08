@@ -112,6 +112,32 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
+    @testset "pixel size from the file or the caller, never assumed" begin
+        mktempdir() do dir
+            # No PixelSize, or an empty one: the caller passes pixel_size; nothing is assumed.
+            for (name, pxfield) in (("absent", nothing), ("empty", zeros(0, 0)))
+                s = smite_smd(3)
+                pxfield === nothing ? delete!(s, "PixelSize") : (s["PixelSize"] = pxfield)
+                smd = write_smd(dir, "px$name.mat", s)
+                @test_throws r"no PixelSize; pass pixel_size" load_smite_2d(smd)
+                smld = load_smite_2d(smd; pixel_size=0.108)
+                @test [e.x for e in smld.emitters] ≈ (vec(s["X"]) .- 0.5) .* 0.108
+                @test smld.camera.pixel_edges_x[end] ≈ 64 * 0.108
+                @test smld.metadata["pixel_size"] == 0.108
+                s3 = smite_smd_3d(3); s3["ZSize"] = 1.0
+                pxfield === nothing ? delete!(s3, "PixelSize") : (s3["PixelSize"] = pxfield)
+                smld = load_smite_3d(write_smd(dir, "px3$name.mat", s3); pixel_size=0.108)
+                @test [e.y for e in smld.emitters] ≈ (vec(s3["Y"]) .- 0.5) .* 0.108
+            end
+            # The file's PixelSize wins; a different pixel_size is an error, the same one is fine.
+            smd = write_smd(dir, "pxfile.mat", smite_smd(3; pixel_size=0.0978))
+            @test load_smite_2d(smd; pixel_size=0.0978).camera.pixel_edges_x[2] ≈ 0.0978
+            @test_throws r"PixelSize 0.0978 µm, but pixel_size = 0.1" load_smite_2d(smd; pixel_size=0.1)
+            s = smite_smd(3); delete!(s, "PixelSize")
+            @test_throws r"not positive" load_smite_2d(write_smd(dir, "pxneg.mat", s); pixel_size=-0.1)
+        end
+    end
+
     @testset "row vectors and a single localization" begin
         mktempdir() do dir
             # Real files store columns; an SMD assembled in MATLAB may hold rows.
