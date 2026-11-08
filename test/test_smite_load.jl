@@ -166,6 +166,17 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
+    @testset "a file without the variable" begin
+        mktempdir() do dir
+            matwrite(joinpath(dir, "other.mat"), Dict("SMR" => Dict("X" => [1.0])))
+            @test_throws r"other.mat has no variable SMD" load_smite_2d(SmiteSMD(dir, "other.mat"))
+            # The file was closed: it can be written again in the same session.
+            es = [Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5)]
+            save_smite(BasicSMLD(es, IdealCamera(1:64, 1:64, 0.1), 1, 1, Dict{String,Any}()), dir, "other.mat")
+            @test length(load_smite_2d(SmiteSMD(dir, "other.mat")).emitters) == 1
+        end
+    end
+
     @testset "a required field that is not numeric" begin
         mktempdir() do dir
             s = smite_smd(2); s["X"] = "not a number"

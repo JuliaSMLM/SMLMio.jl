@@ -48,9 +48,13 @@ const _SMITE_STACKABLE = ("XBoxCorner", "YBoxCorner", "X", "Y", "Z", "X_SE", "Y_
 # Shared body of load_smite_2d and load_smite_3d.
 function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     p = joinpath(smd.filepath, smd.filename)
-    file = matopen(p)
-    s = read(file, smd.varname)
-    close(file)
+    # The do form closes the file on any error
+    s = matopen(p) do file
+        smd.varname in keys(file) ||
+            throw(ArgumentError("$(smd.filename) has no variable $(smd.varname) (it has $(join(sort(collect(keys(file))), ", ")))"))
+        read(file, smd.varname)
+    end
+    s isa AbstractDict || throw(ArgumentError("$(smd.filename): $(smd.varname) is not a structure"))
     where = "$(smd.filename) ($(smd.varname))"
 
     haskey(s, "X") || throw(ArgumentError("$where has no X field"))
