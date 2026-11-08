@@ -17,8 +17,8 @@ Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite
   is not at 0 warns, and the file loads back with the camera at 0 and the positions moved by
   that offset.
 - `Photons`, `Bg`, their standard errors, `FrameNum`, `DatasetNum` and `ConnectID` (the track
-  id). Counts and indices are written as doubles, as SMITE's results files hold them (SMITE
-  creates an empty `ConnectID` as uint32; MATLAB integer arithmetic would round).
+  id). Counts and indices are written as doubles, as most SMITE results files hold them (some
+  hold `ConnectID` as uint32; MATLAB integer arithmetic would round).
 - `Z` and `Z_SE` (microns) for `Emitter3DFit` emitters, or for non-empty 3D data
   (`emitter_ndims`) whose every emitter has properties `z` and `σ_z` and whose `z` and `σ_z`
   columns are each all `Float32` or all `Float64` (MATLAB single or double; MAT.jl cannot write
@@ -42,8 +42,14 @@ Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite
   connection's combined output, emitters joined from another file, changed frames or photons,
   ids that are not rows, no row record) those fields are dropped with a warning; so is a field
   replaced since loading that no longer has one value per file row.
+- A field SMITE stacks per localization that the loaded file held otherwise (often one value per
+  dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files) as the file had it,
+  unless the saved localizations are as many as its values: then a load would take it for one
+  value per localization, and it is dropped with a warning.
 - An optional field the file left empty (`ConnectID` before frame connection, ...), which the
-  loader defaulted, back empty while it still holds only the default.
+  loader defaulted, back empty while it still holds only the default. A `Photons_SE` or `Bg_SE`
+  the file held with one value per dataset is saved as the `NaN` it loaded as; its per-dataset
+  values are not saved.
 
 Not saved: `σ_xy` (SMITE has no such field; it loads back as 0) and the emitter `id`, which
 loads back as the row in the new file. A type whose `propertynames` lists a property that
@@ -104,7 +110,7 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     s["Photons_SE"] = [e.σ_photons for e in smld.emitters]
     s["Bg_SE"] = [e.σ_bg for e in smld.emitters]
     
-    # Counts and indices are doubles, as SMITE's results files hold them (MATLAB integer arithmetic
+    # Counts and indices are doubles, as most SMITE results files hold them (MATLAB integer arithmetic
     # rounds)
     s["FrameNum"] = Float64[e.frame for e in smld.emitters]
     s["DatasetNum"] = Float64[e.dataset for e in smld.emitters]

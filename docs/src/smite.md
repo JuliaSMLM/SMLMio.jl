@@ -93,7 +93,7 @@ save_smite(smld, "output/directory", "processed_Results.mat")
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Z`, `Z_SE` in microns for 3D data
 - `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
-  and indices as doubles, as SMITE's results files hold them. SMITE has one pixel size, so a
+  and indices as doubles, as most SMITE results files hold them. SMITE has one pixel size, so a
   camera whose pixels are not uniform and square is an error.
 - every metadata entry that is not an emitter column, except the loaders' own: `original_file`,
   `data_size`, `pixel_size`, `smite_defaulted_fields`, `smite_per_localization_fields`,
@@ -105,8 +105,13 @@ save_smite(smld, "output/directory", "processed_Results.mat")
   localizations (frame connection's combined output), emitters joined from another file, or
   changed frames or photons, they are dropped with a warning. A field replaced since loading
   that no longer has one value per file row is dropped with a warning too.
+- a field SMITE stacks per localization that the loaded file held with one value per dataset
+  (`PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files) as the file had it, unless the
+  saved localizations are as many as its values: then a load would take it for one value per
+  localization, and it is dropped with a warning.
 - An optional field the file left empty, and nobody has set since loading, back empty (an
-  empty `ConnectID` stays empty).
+  empty `ConnectID` stays empty). A `Photons_SE` or `Bg_SE` the file held with one value per
+  dataset is saved as the `NaN` it loaded as; its per-dataset values are not saved.
 
 Loading the saved file gives back the emitters' positions, uncertainties, photons, background,
 frames, datasets and track ids, and `n_frames` and `n_datasets`. It does not give back:

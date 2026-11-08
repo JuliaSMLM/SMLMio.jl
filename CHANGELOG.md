@@ -37,14 +37,21 @@ found by reading SMITE's code or by review, and each has a test that fails witho
   belonged to other localizations. The loaders list SMITE's per-localization fields (catSMD's
   list) in `metadata["smite_per_localization_fields"]` and record each row's frame and photons;
   `save_smite` writes those fields by each emitter's file row (`id`) when every emitter is still
-  its row, and otherwise (combined localizations such as frame connection's combined output, another file's emitters)
-  drops them with a warning.
+  its row, and otherwise (combined localizations such as frame connection's combined output,
+  another file's emitters) drops them with a warning.
+- Some older SMITE files hold `PValue`, `ThreshFlag`, `XBoxCorner` or `YBoxCorner` with one value
+  per dataset. Saved with as many localizations as values, `save_smite` wrote them where a load
+  (and SMITE) took them for one value per localization; such a field is now dropped with a
+  warning in that case.
 - `save_smite` wrote the loaders' own metadata (`original_file`, `complex_*`) into the file, and
   loading it back reported the earlier file's name and complex screening. The loaders' entries
   are now never saved and never taken from a file.
 - `save_smite` wrote counts and indices (`FrameNum`, `DatasetNum`, `ConnectID`, `NFrames`,
-  `NDatasets`) as MATLAB int64; SMITE's results files hold doubles, and MATLAB integer arithmetic
-  rounds. They are now doubles. Optional fields the file left empty and nobody has set since
-  loading are saved empty (an empty `ConnectID` stays empty).
+  `NDatasets`) as MATLAB int64; most SMITE results files hold doubles, and MATLAB integer
+  arithmetic rounds. They are now doubles. Optional fields the file left empty and nobody has set
+  since loading are saved empty (an empty `ConnectID` stays empty).
+- The loaders left the file open when reading it failed, and a file without the variable gave a
+  bare `KeyError`; the file is now closed on any error and a missing variable is an
+  `ArgumentError` naming it.
 - `load_smite_2d` on a 3D file now warns that it leaves out `Z`; a camera whose first edge is
   not at 0 now warns on save, since SMITE has no origin.
