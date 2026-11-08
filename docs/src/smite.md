@@ -55,11 +55,12 @@ smld.metadata["DriftX"]        # every other SMD field, as SMITE wrote it (drift
 smld.metadata["PValue"]        # one value per row of the file; emitter e is row e.id
 ```
 
-Each emitter's `id` is its row in the file. The SMD fields kept in metadata with one value per
-row (`PValue`, `LogLikelihood`, `PSFSigma`, `ThreshFlag`, ...) are listed in
-`metadata["smite_per_localization_fields"]`; index them by `id`, for example
-`smld.metadata["PValue"][e.id]`. In a file whose number of localizations equals its number of
-datasets, a per-dataset field cannot be told apart from a per-localization one.
+Each emitter's `id` is its row in the file. The fields SMITE stacks per localization (its
+catSMD list: `PValue`, `LogLikelihood`, `PSFSigma`, `ThreshFlag`, `XBoxCorner`, ...) that the
+file holds with one value per row are listed in `metadata["smite_per_localization_fields"]`;
+index them by `id`, for example `smld.metadata["PValue"][e.id]`. `metadata["smite_rows"]`
+records each row's frame and photons. Some older SMITE files hold such a field with one value
+per dataset; in a file with as many localizations as datasets that cannot be told apart.
 
 What the loaders do with fields SMITE leaves empty or writes in another shape:
 
@@ -92,14 +93,19 @@ save_smite(smld, "output/directory", "processed_Results.mat")
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Z`, `Z_SE` in microns for 3D data
 - `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
-  and indices as doubles, as SMITE writes them. SMITE has one pixel size, so a camera whose
-  pixels are not uniform and square is an error.
-- every metadata entry that is not an emitter column, except the loaders' own (`original_file`,
-  `data_size`, `pixel_size`, `smite_*`, `complex_*`). The per-localization fields a loader kept
-  are written for the saved emitters' rows, so after a filter `PValue` still belongs to its
-  localization; for data sets combined from several files they are dropped with a warning.
-  An optional field the loader defaulted and nobody has set since is written as the file had
-  it (an empty `ConnectID` stays empty).
+  and indices as doubles, as SMITE's results files hold them. SMITE has one pixel size, so a
+  camera whose pixels are not uniform and square is an error.
+- every metadata entry that is not an emitter column, except the loaders' own: `original_file`,
+  `data_size`, `pixel_size`, `smite_defaulted_fields`, `smite_per_localization_fields`,
+  `smite_rows`, `complex_fields_removed`, `complex_fields`, `original_emitter_count` and
+  `removed_emitter_count`.
+- SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
+  `PValue` still belongs to its localization. They are written only when every emitter is
+  still the file row its `id` names (the same frame and photons as when loaded); for
+  frame-connected or combined localizations, emitters joined from another file, or changed
+  frames, they are dropped with a warning.
+- An optional field the file left empty, and nobody has set since loading, back empty (an
+  empty `ConnectID` stays empty).
 
 Loading the saved file gives back the emitters' positions, uncertainties, photons, background,
 frames, datasets and track ids, and `n_frames` and `n_datasets`. It does not give back:

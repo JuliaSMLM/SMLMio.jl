@@ -8,7 +8,9 @@
 - Weak dependency on SMLMData >= 0.7.2 guards against two copies of each type
   beside pre-split SMLMData.
 
-Fixed relative to SMLMData 0.7.1:
+Fixed relative to SMLMData 0.7.1. The positions, optional-field, empty-result, save-and-load
+and filter-then-save fixes were reproduced on real SMITE results files first; the others were
+found by reading SMITE's code or by review, and each has a test that fails without it:
 
 - Positions: SMITE stores `X`, `Y`, `X_SE`, `Y_SE` in pixels with (1, 1) the center of the
   top-left pixel. The loaders kept them as microns (every file loaded 1/PixelSize times too large,
@@ -32,15 +34,17 @@ Fixed relative to SMLMData 0.7.1:
   is an `ArgumentError`. `save_smite` takes any `AbstractSMLD`, not only a `SmiteSMLD`.
 - After a filter, or complex screening at load, `save_smite` wrote the SMD fields kept in
   metadata (`PValue`, `LogLikelihood`, ...) unchanged next to fewer localizations, so they
-  belonged to other localizations. The loaders list those fields in
-  `metadata["smite_per_localization_fields"]` and `save_smite` writes them by each emitter's file
-  row (`id`); for combined data sets it drops them with a warning.
+  belonged to other localizations. The loaders list SMITE's per-localization fields (catSMD's
+  list) in `metadata["smite_per_localization_fields"]` and record each row's frame and photons;
+  `save_smite` writes those fields by each emitter's file row (`id`) when every emitter is still
+  its row, and otherwise (frame-connected or combined localizations, another file's emitters)
+  drops them with a warning.
 - `save_smite` wrote the loaders' own metadata (`original_file`, `complex_*`) into the file, and
   loading it back reported the earlier file's name and complex screening. The loaders' entries
   are now never saved and never taken from a file.
 - `save_smite` wrote counts and indices (`FrameNum`, `DatasetNum`, `ConnectID`, `NFrames`,
-  `NDatasets`) as MATLAB int64; SMITE writes doubles, and MATLAB integer arithmetic rounds. They
-  are now doubles. Defaulted fields that nobody has set since loading are saved as the file had
-  them (an empty `ConnectID` stays empty).
+  `NDatasets`) as MATLAB int64; SMITE's results files hold doubles, and MATLAB integer arithmetic
+  rounds. They are now doubles. Optional fields the file left empty and nobody has set since
+  loading are saved empty (an empty `ConnectID` stays empty).
 - `load_smite_2d` on a 3D file now warns that it leaves out `Z`; a camera whose first edge is
   not at 0 now warns on save, since SMITE has no origin.

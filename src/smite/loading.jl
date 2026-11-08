@@ -196,10 +196,12 @@ SmiteSMLD containing 2D localizations
   one value per dataset (some older SMITE versions); their raw values stay in the metadata, and
   `metadata["smite_defaulted_fields"]` lists them. A non-empty field of the wrong length warns.
 - Every other SMD field is kept in the metadata as SMITE wrote it (for example `DriftX` in pixels).
-  Each emitter's `id` is its row in the file; `metadata["smite_per_localization_fields"]` lists
-  the kept fields with one value per row (`PValue`, `LogLikelihood`, ...), which `save_smite`
-  writes back by row. With as many localizations as datasets, a per-dataset field cannot be told
-  apart from a per-localization one.
+  Each emitter's `id` is its row in the file. `metadata["smite_per_localization_fields"]` lists
+  the kept fields SMITE stacks per localization (its catSMD list: `PValue`, `LogLikelihood`,
+  `PSFSigma`, ...) that hold one value per row; `metadata["smite_rows"]` records each row's frame
+  and photons, by which `save_smite` checks that an emitter is still its row before writing
+  those fields back by row. Some older SMITE files hold such a field with one value per
+  dataset; in a file with as many localizations as datasets that cannot be told apart.
 - On a file with `NDims` 3, warns that `Z` is left out (it stays in the metadata).
 - Emitters with non-zero imaginary components are excluded with a warning.
 - Throws an `ArgumentError` when the file has no pixel size and none is passed, no image size

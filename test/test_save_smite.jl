@@ -1,4 +1,5 @@
-# These tests moved from SMLMData 0.7.1's test/test_filters.jl unchanged.
+# These tests moved from SMLMData 0.7.1's test/test_filters.jl. Since the move they compare positions in
+# SMITE's pixels and expect the camera fields (XSize, YSize, PixelSize, NDims) in each saved file.
 using SMLMio, Test
 using SMLMCore: SMLMCore, IdealCamera, Emitter2DFit, Emitter3DFit, emitter_ndims
 using MAT: matread, matwrite

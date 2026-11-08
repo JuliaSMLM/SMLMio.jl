@@ -17,7 +17,8 @@ Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite
   is not at 0 warns, and the file loads back with the camera at 0 and the positions moved by
   that offset.
 - `Photons`, `Bg`, their standard errors, `FrameNum`, `DatasetNum` and `ConnectID` (the track
-  id). Counts and indices are doubles, as SMITE writes them.
+  id). Counts and indices are written as doubles, as SMITE's results files hold them (SMITE
+  creates an empty `ConnectID` as uint32; MATLAB integer arithmetic would round).
 - `Z` and `Z_SE` (microns) for `Emitter3DFit` emitters, or for non-empty 3D data
   (`emitter_ndims`) whose every emitter has properties `z` and `σ_z` and whose `z` and `σ_z`
   columns are each all `Float32` or all `Float64` (MATLAB single or double; MAT.jl cannot write
@@ -28,13 +29,18 @@ Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite
   `Z`, else 2). SMITE has one pixel size, so a camera whose pixels are not uniform and square is
   an `ArgumentError`. An sCMOS camera's calibration maps are not saved; the file loads back
   with an `IdealCamera`.
-- Every metadata entry that is not an emitter column, except the loaders' own entries
-  (`original_file`, `data_size`, `pixel_size`, `smite_*`, `complex_*`). The SMITE fields a
-  loader kept with one value per localization (`metadata["smite_per_localization_fields"]`:
-  `PValue`, `LogLikelihood`, ...) are written for the saved emitters' file rows (their `id`);
-  for combined data sets, or ids that are not file rows, they are dropped with a warning. An
-  optional field the loader defaulted (`metadata["smite_defaulted_fields"]`) that still holds
-  only its default is written as the file had it, so an empty `ConnectID` stays empty.
+- Every metadata entry that is not an emitter column, except the loaders' own entries:
+  `original_file`, `data_size`, `pixel_size`, `smite_defaulted_fields`,
+  `smite_per_localization_fields`, `smite_rows`, `complex_fields_removed`, `complex_fields`,
+  `original_emitter_count` and `removed_emitter_count`.
+- SMITE's per-localization fields a loader kept (`metadata["smite_per_localization_fields"]`:
+  `PValue`, `LogLikelihood`, `PSFSigma`, ...) for the saved emitters' file rows, the row being
+  each emitter's `id`, when every emitter is still the row its `id` names: the same frame and
+  photons the loader recorded for that row (`metadata["smite_rows"]`). Otherwise (frame-connected
+  or combined localizations, emitters joined from another file, changed frames or photons, ids
+  that are not rows) those fields are dropped with a warning.
+- An optional field the file left empty (`ConnectID` before frame connection, ...), which the
+  loader defaulted, back empty while it still holds only the default.
 
 Not saved: `σ_xy` (SMITE has no such field; it loads back as 0) and the emitter `id`, which
 loads back as the row in the new file. A type whose `propertynames` lists a property that
@@ -95,7 +101,8 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     s["Photons_SE"] = [e.σ_photons for e in smld.emitters]
     s["Bg_SE"] = [e.σ_bg for e in smld.emitters]
     
-    # Counts and indices are doubles, as SMITE writes them (MATLAB integer arithmetic rounds)
+    # Counts and indices are doubles, as SMITE's results files hold them (MATLAB integer arithmetic
+    # rounds)
     s["FrameNum"] = Float64[e.frame for e in smld.emitters]
     s["DatasetNum"] = Float64[e.dataset for e in smld.emitters]
     s["ConnectID"] = Float64[e.track_id for e in smld.emitters]
