@@ -423,7 +423,7 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
-    @testset "save_smite writes untouched defaulted fields back as SMITE had them" begin
+    @testset "save_smite writes empty defaulted fields back empty" begin
         mktempdir() do dir
             # SMITE treats an empty ConnectID (no frame connection) differently from zeros.
             s = smite_smd(3); s["ConnectID"] = zeros(UInt32, 0, 0)
@@ -432,9 +432,18 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             save_smite(a, dir, "b.mat")
             saved = matread(joinpath(dir, "b.mat"))["SMD"]
             @test isempty(saved["ConnectID"])
-            @test vec(saved["Photons_SE"]) == Float32[31, 32]
+            # A per-dataset value is not one per localization: the saved column is the NaN that
+            # loaded, never the per-dataset numbers, which a later load could take for
+            # per-localization uncertainties.
+            @test all(isnan, vec(saved["Photons_SE"])) && length(vec(saved["Photons_SE"])) == 3
             b = quiet(() -> load_smite_2d(SmiteSMD(dir, "b.mat")))
-            @test b.metadata["smite_defaulted_fields"] == a.metadata["smite_defaulted_fields"]
+            @test all(e -> isnan(e.σ_photons), b.emitters)
+            @test b.metadata["smite_defaulted_fields"] == ["ConnectID"]
+            # Kept rows as many as the datasets: still NaN.
+            two = SMLMCore.@filter(a, frame <= 2)
+            save_smite(two, dir, "two.mat")
+            t = quiet(() -> load_smite_2d(SmiteSMD(dir, "two.mat")))
+            @test all(e -> isnan(e.σ_photons), t.emitters)
             # Values set since loading are written.
             a.emitters[1].track_id = 7
             save_smite(a, dir, "c.mat")

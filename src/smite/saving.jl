@@ -110,11 +110,14 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
 
     md = smld.metadata
 
-    # Optional fields the loader filled with defaults and that still hold only the default go back
-    # as the file had them (SMITE treats an empty ConnectID differently from zeros).
+    # Optional fields the file left empty, which the loader filled with defaults and that still hold
+    # only the default, go back empty (SMITE treats an empty ConnectID differently from zeros). A
+    # field the file held with one value per dataset is written as the default column instead: its
+    # raw values are not one per localization, and a later load could take them for that.
     defaulted = get(md, "smite_defaulted_fields", String[])
     for (key, default) in _SMITE_OPTIONAL
-        key in defaulted && haskey(md, key) && all(v -> isequal(v, default), s[key]) && (s[key] = md[key])
+        key in defaulted && haskey(md, key) && _smite_length(md[key]) == 0 &&
+            all(v -> isequal(v, default), s[key]) && (s[key] = md[key])
     end
 
     # SMITE's per-localization fields the loader kept (PValue, LogLikelihood, ...) are written for
