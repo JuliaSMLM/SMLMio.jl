@@ -242,8 +242,10 @@ end
     end
 
     @testset "save_smite against 0.7.0" begin
-        # Where 0.7.0 saved, save_smite saves too, keeping every 0.7.0 key and value; it adds only
-        # Z and Z_SE, for non-empty 3D data whose z and σ_z are all Float32 or Float64.
+        # Where 0.7.0 saved, save_smite saves too, keeping every 0.7.0 key and value (positions in
+        # SMITE's pixels); it adds the camera's NDims, PixelSize, XSize and YSize, and Z and Z_SE
+        # for non-empty 3D data whose z and σ_z are all Float32 or Float64.
+        camkeys = ["NDims", "PixelSize", "XSize", "YSize"]
         cam = IdealCamera(1:64, 1:64, 0.1)
         A = SMLMCore.AbstractEmitter
         sm(v) = SmiteSMLD{Float64,eltype(v)}(v, cam, 1, 1, Dict{String,Any}())
@@ -265,13 +267,14 @@ end
                      # would write as a cell: no Z.
                      sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]))
         for s in unchanged
-            @test first(_legacy_compare(s)) == String[]
+            @test first(_legacy_compare(s)) == camkeys
         end
         widened = (sm(A[e3, e3b]), sm([f3, f3b]), sm([_oddz(0.5, 0.02), _oddz(0.25, 0.03)]),
                    sm([_oddz(0.5f0, 0.02f0), _oddz(0.25f0, 0.03f0)]))
         for s in widened
             added, new = _legacy_compare(s)
-            @test added == ["Z", "Z_SE"]
+            @test added == [camkeys; "Z"; "Z_SE"]
+            @test new["NDims"] == 3
             @test vec(new["Z"]) == [e.z for e in s.emitters]
             @test vec(new["Z_SE"]) == [e.σ_z for e in s.emitters]
             @test eltype(new["Z"]) === typeof(first(s.emitters).z)

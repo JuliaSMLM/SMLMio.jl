@@ -218,4 +218,49 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             end
         end
     end
+
+    @testset "save_smite then load: the same data" begin
+        # SMITE has no emitter id; the loaders number emitters by row, so `skip` drops `id` when the
+        # data were not loaded from SMITE.
+        same_emitters(a, b; skip=()) = length(a) == length(b) && all(zip(a, b)) do (p, q)
+            all(f -> f in skip || isequal(getfield(p, f), getfield(q, f)) ||
+                     (getfield(p, f) isa AbstractFloat && getfield(p, f) ≈ getfield(q, f)),
+                fieldnames(typeof(p)))
+        end
+        mktempdir() do dir
+            # load, save, load (2D, 3D without ZSize, a file with defaulted fields)
+            s2 = smite_smd(4; pixel_size=0.108)
+            s3 = smite_smd_3d(4; pixel_size=0.0978)
+            sd = smite_smd(4); sd["ConnectID"] = zeros(UInt32, 0, 0); sd["Bg_SE"] = zeros(0, 0)
+            for (name, s, load) in (("2d", s2, load_smite_2d), ("3d", s3, load_smite_3d), ("def", sd, load_smite_2d))
+                a = load(write_smd(dir, "$name.mat", s))
+                save_smite(a, dir, "$name-saved.mat")
+                b = load(SmiteSMD(dir, "$name-saved.mat"))
+                @test same_emitters(a.emitters, b.emitters)
+                @test b.camera.pixel_edges_x ≈ a.camera.pixel_edges_x
+                @test b.camera.pixel_edges_y ≈ a.camera.pixel_edges_y
+                @test (b.n_frames, b.n_datasets) == (a.n_frames, a.n_datasets)
+                saved = matread(joinpath(dir, "$name-saved.mat"))["SMD"]
+                @test (saved["XSize"], saved["YSize"], saved["PixelSize"]) == (64, 64, s["PixelSize"])
+                @test saved["NDims"] == (name == "3d" ? 3 : 2)
+                @test !haskey(saved, "data_size") && !haskey(saved, "pixel_size")
+                @test !haskey(saved, "smite_defaulted_fields")
+                @test vec(saved["DriftX"]) == vec(s["DriftX"])   # other SMITE fields kept
+            end
+            # Any SMLD saves, not only a SmiteSMLD, and loads back.
+            cam = IdealCamera(1:32, 1:16, 0.1)
+            es = [Emitter2DFit{Float64}(1.0, 0.5, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5; frame=2, dataset=1),
+                  Emitter2DFit{Float64}(2.5, 1.2, 900.0, 4.0, 0.02, 0.03, 30.0, 0.5; frame=7, dataset=1)]
+            basic = BasicSMLD(es, cam, 10, 1, Dict{String,Any}())
+            save_smite(basic, dir, "basic.mat")
+            b = load_smite_2d(SmiteSMD(dir, "basic.mat"))
+            @test same_emitters(es, b.emitters; skip=(:id,))
+            @test [e.id for e in b.emitters] == [1, 2]
+            @test b.camera.pixel_edges_x ≈ cam.pixel_edges_x
+            @test b.camera.pixel_edges_y ≈ cam.pixel_edges_y
+            # SMITE has one square pixel size: a camera with other pixels is an error.
+            rect = BasicSMLD(es, IdealCamera(32, 16, (0.1, 0.2)), 10, 1, Dict{String,Any}())
+            @test_throws r"one square pixel size" save_smite(rect, dir, "rect.mat")
+        end
+    end
 end

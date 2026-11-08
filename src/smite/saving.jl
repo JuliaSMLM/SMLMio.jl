@@ -1,10 +1,11 @@
 """
-    save_smite(smld::SmiteSMLD, filepath::String, filename::String)
+    save_smite(smld::AbstractSMLD, filepath::String, filename::String)
 
-Save SmiteSMLD data back to SMITE's SMD .mat format.
+Save SMLD data to SMITE's SMD .mat format, readable by `load_smite_2d` and `load_smite_3d`.
 
 # Arguments
-- `smld::SmiteSMLD`: SMLD object to save
+- `smld::AbstractSMLD`: SMLD object to save (a `SmiteSMLD`, a `BasicSMLD` or any other SMLD
+  with `emitters`, `camera`, `n_frames`, `n_datasets` and `metadata`)
 - `filepath::String`: Directory path where to save the file
 - `filename::String`: Name of the output .mat file
 
@@ -13,22 +14,26 @@ Save SmiteSMLD data back to SMITE's SMD .mat format.
 - Writes `X`, `Y`, `X_SE` and `Y_SE` in SMITE's pixels, (1, 1) the center of the camera's
   top-left pixel: `X = (x - x_edge) / pixel_size + 0.5`, `X_SE = σ_x / pixel_size`, where
   `x_edge` is the camera's first pixel edge. `Z` and `Z_SE` stay in microns.
-- Preserves all metadata fields whose names are not emitter columns; an emitter column wins over
-  a metadata entry of the same name, so data that get `Z` and `Z_SE` here replace a metadata `Z`
-  or `Z_SE` that v0.7.0 would have written
+- Writes `XSize`, `YSize` and `PixelSize` from the camera, and `NDims` (3 when it writes `Z`,
+  else 2). SMITE has one pixel size, so a camera whose pixels are not uniform and square is an
+  `ArgumentError`.
+- Preserves all metadata fields whose names are not emitter columns, except the loaders' own
+  `data_size`, `pixel_size` and `smite_defaulted_fields`; an emitter column wins over a metadata
+  entry of the same name, so data that get `Z` and `Z_SE` here replace a metadata `Z` or `Z_SE`
+  that v0.7.0 would have written
 - Writes `Z` and `Z_SE` for an `Emitter3DFit` element type (as v0.7.0 did), or for non-empty 3D
   data (`emitter_ndims`) whose every emitter has properties `z` and `σ_z` and whose `z` and `σ_z`
   columns each come out as a `Vector{Float32}` or `Vector{Float64}`. Otherwise it writes v0.7.0's
   columns, with no `Z`, and warns when non-empty 3D or mixed 2D/3D data lose `Z` (a SMITE SMD
   file has one `Z` column for all localizations, so save 2D and 3D data separately to keep it).
-  It never throws where v0.7.0 saved.
+  Apart from the camera check above, it never throws where v0.7.0 saved.
 - Only `Float32` and `Float64` columns widen, because MATLAB stores those as single and double:
   MAT.jl writes `Float64`, `Float32`, `Int` and `Bool` vectors but throws on `Float16`,
   `Rational`, `BigFloat` and `missing`, and writes a mixed `Float32`/`Float64` column as a cell.
 - A type whose `propertynames` lists a property that `getproperty` refuses breaks Julia's
   property interface and is not supported.
 """
-function save_smite(smld::SmiteSMLD, filepath::String, filename::String)
+function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     # Create SMD structure
     s = Dict{String,Any}()
     
@@ -54,12 +59,16 @@ function save_smite(smld::SmiteSMLD, filepath::String, filename::String)
     
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
     # the center of the top-left pixel; positions here are microns from the camera's corner.
+    # SMITE has one PixelSize, so the camera's pixels must be uniform and square.
     cam = smld.camera
-    x0, y0 = cam.pixel_edges_x[1], cam.pixel_edges_y[1]
-    px = (cam.pixel_edges_x[end] - x0) / (length(cam.pixel_edges_x) - 1)
-    py = (cam.pixel_edges_y[end] - y0) / (length(cam.pixel_edges_y) - 1)
+    ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
+    x0, y0 = ex[1], ey[1]
+    px = (ex[end] - x0) / (length(ex) - 1)
+    all(d -> isapprox(d, px; rtol=1e-6), diff(ex)) && all(d -> isapprox(d, px; rtol=1e-6), diff(ey)) ||
+        throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels " *
+                            "are not uniform and square"))
     s["X"] = [(e.x - x0) / px + 0.5 for e in smld.emitters]
-    s["Y"] = [(e.y - y0) / py + 0.5 for e in smld.emitters]
+    s["Y"] = [(e.y - y0) / px + 0.5 for e in smld.emitters]
     if zcols !== nothing
         s["Z"] = zcols[1]
     end
@@ -68,7 +77,7 @@ function save_smite(smld::SmiteSMLD, filepath::String, filename::String)
     s["Bg"] = [e.bg for e in smld.emitters]
     
     s["X_SE"] = [e.σ_x / px for e in smld.emitters]
-    s["Y_SE"] = [e.σ_y / py for e in smld.emitters]
+    s["Y_SE"] = [e.σ_y / px for e in smld.emitters]
     if zcols !== nothing
         s["Z_SE"] = zcols[2]
     end
@@ -80,12 +89,18 @@ function save_smite(smld::SmiteSMLD, filepath::String, filename::String)
     s["DatasetNum"] = [e.dataset for e in smld.emitters]
     s["ConnectID"] = [e.track_id for e in smld.emitters]
     
-    # Add metadata
+    # Add metadata: what the loaders need to read the file back, from the camera
     s["NFrames"] = smld.n_frames
     s["NDatasets"] = smld.n_datasets
-    
-    # Add any additional fields from metadata
+    s["XSize"] = length(ex) - 1
+    s["YSize"] = length(ey) - 1
+    s["PixelSize"] = px
+    s["NDims"] = zcols === nothing ? 2 : 3
+
+    # Add any additional fields from metadata, except the loaders' own entries
+    # (data_size and pixel_size repeat XSize, YSize and PixelSize)
     for (key, value) in smld.metadata
+        key in ("data_size", "pixel_size", "smite_defaulted_fields") && continue
         if !haskey(s, key)
             s[key] = value
         end
