@@ -79,7 +79,9 @@ Checks for complex fields and removes emitters with non-zero imaginary component
 SmiteSMLD containing 2D localizations
 
 # Notes
-- All spatial coordinates are converted to microns
+- SMITE stores `X`, `Y`, `X_SE` and `Y_SE` in pixels, with (1, 1) the center of the top-left
+  pixel; they load in microns from the camera's corner: `x = (X - 0.5) * PixelSize`,
+  `σ_x = X_SE * PixelSize`. `Z` and `Z_SE` are microns in SMITE and load unchanged.
 - If PixelSize is not specified in the file, defaults to 0.1 microns
 - Emitters with non-zero imaginary components will be excluded with a warning
 - Fields are converted from Float32 to Float64 as needed
@@ -116,13 +118,15 @@ function load_smite_2d(smd::SmiteSMD)
     emitters = Vector{Emitter2DFit{Float64}}(undef, n_valid)
     
     for (new_idx, i) in enumerate(valid_indices)
-        # Convert all values to Float64 explicitly
-        x = Float64(real(s["X"][i]))
-        y = Float64(real(s["Y"][i]))
+        # Convert all values to Float64 explicitly. SMITE stores X, Y and their standard errors in
+        # pixels, (1, 1) the center of the top-left pixel; positions here are microns from the
+        # camera's corner. Z and Z_SE are microns in both.
+        x = (Float64(real(s["X"][i])) - 0.5) * pixel_size
+        y = (Float64(real(s["Y"][i])) - 0.5) * pixel_size
         photons = Float64(real(s["Photons"][i]))
         bg = Float64(real(s["Bg"][i]))
-        σ_x = Float64(real(s["X_SE"][i]))
-        σ_y = Float64(real(s["Y_SE"][i]))
+        σ_x = Float64(real(s["X_SE"][i])) * pixel_size
+        σ_y = Float64(real(s["Y_SE"][i])) * pixel_size
         σ_photons = Float64(real(s["Photons_SE"][i]))
         σ_bg = Float64(real(s["Bg_SE"][i]))
         
@@ -184,7 +188,9 @@ Checks for complex fields and removes emitters with non-zero imaginary component
 SmiteSMLD containing 3D localizations
 
 # Notes
-- All spatial coordinates are converted to microns
+- SMITE stores `X`, `Y`, `X_SE` and `Y_SE` in pixels, with (1, 1) the center of the top-left
+  pixel; they load in microns from the camera's corner: `x = (X - 0.5) * PixelSize`,
+  `σ_x = X_SE * PixelSize`. `Z` and `Z_SE` are microns in SMITE and load unchanged.
 - If PixelSize is not specified in the file, defaults to 0.1 microns
 - Emitters with non-zero imaginary components will be excluded with a warning
 - Fields are converted from Float32 to Float64 as needed
@@ -221,14 +227,16 @@ function load_smite_3d(smd::SmiteSMD)
     emitters = Vector{Emitter3DFit{Float64}}(undef, n_valid)
     
     for (new_idx, i) in enumerate(valid_indices)
-        # Convert all values to Float64 explicitly
-        x = Float64(real(s["X"][i]))
-        y = Float64(real(s["Y"][i]))
+        # Convert all values to Float64 explicitly. SMITE stores X, Y and their standard errors in
+        # pixels, (1, 1) the center of the top-left pixel; positions here are microns from the
+        # camera's corner. Z and Z_SE are microns in both.
+        x = (Float64(real(s["X"][i])) - 0.5) * pixel_size
+        y = (Float64(real(s["Y"][i])) - 0.5) * pixel_size
         z = Float64(real(s["Z"][i]))
         photons = Float64(real(s["Photons"][i]))
         bg = Float64(real(s["Bg"][i]))
-        σ_x = Float64(real(s["X_SE"][i]))
-        σ_y = Float64(real(s["Y_SE"][i]))
+        σ_x = Float64(real(s["X_SE"][i])) * pixel_size
+        σ_y = Float64(real(s["Y_SE"][i])) * pixel_size
         σ_z = Float64(real(s["Z_SE"][i]))
         σ_photons = Float64(real(s["Photons_SE"][i]))
         σ_bg = Float64(real(s["Bg_SE"][i]))

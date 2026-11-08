@@ -10,6 +10,9 @@ Save SmiteSMLD data back to SMITE's SMD .mat format.
 
 # Notes
 - Saves in MATLAB v7.3 format
+- Writes `X`, `Y`, `X_SE` and `Y_SE` in SMITE's pixels, (1, 1) the center of the camera's
+  top-left pixel: `X = (x - x_edge) / pixel_size + 0.5`, `X_SE = σ_x / pixel_size`, where
+  `x_edge` is the camera's first pixel edge. `Z` and `Z_SE` stay in microns.
 - Preserves all metadata fields whose names are not emitter columns; an emitter column wins over
   a metadata entry of the same name, so data that get `Z` and `Z_SE` here replace a metadata `Z`
   or `Z_SE` that v0.7.0 would have written
@@ -49,9 +52,14 @@ function save_smite(smld::SmiteSMLD, filepath::String, filename::String)
         d == 3 && @warn("save_smite: 3D emitters without Float32/Float64 z and σ_z: Z not saved")
     end
     
-    # Extract arrays from emitters
-    s["X"] = [e.x for e in smld.emitters]
-    s["Y"] = [e.y for e in smld.emitters]
+    # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
+    # the center of the top-left pixel; positions here are microns from the camera's corner.
+    cam = smld.camera
+    x0, y0 = cam.pixel_edges_x[1], cam.pixel_edges_y[1]
+    px = (cam.pixel_edges_x[end] - x0) / (length(cam.pixel_edges_x) - 1)
+    py = (cam.pixel_edges_y[end] - y0) / (length(cam.pixel_edges_y) - 1)
+    s["X"] = [(e.x - x0) / px + 0.5 for e in smld.emitters]
+    s["Y"] = [(e.y - y0) / py + 0.5 for e in smld.emitters]
     if zcols !== nothing
         s["Z"] = zcols[1]
     end
@@ -59,8 +67,8 @@ function save_smite(smld::SmiteSMLD, filepath::String, filename::String)
     s["Photons"] = [e.photons for e in smld.emitters]
     s["Bg"] = [e.bg for e in smld.emitters]
     
-    s["X_SE"] = [e.σ_x for e in smld.emitters]
-    s["Y_SE"] = [e.σ_y for e in smld.emitters]
+    s["X_SE"] = [e.σ_x / px for e in smld.emitters]
+    s["Y_SE"] = [e.σ_y / py for e in smld.emitters]
     if zcols !== nothing
         s["Z_SE"] = zcols[2]
     end
