@@ -24,8 +24,6 @@ module SMLMio
 using MAT: matopen, matwrite
 using SMLMCore: AbstractCamera, AbstractEmitter, AbstractSMLD, Emitter2DFit, Emitter3DFit,
     IdealCamera, emitter_ndims
-# Internal helpers SMLMCore uses for its own show methods; SmiteSMLD's show reuses them.
-using SMLMCore: _dim_label, format_with_commas
 
 export SmiteSMD, SmiteSMLD, load_smite_2d, load_smite_3d, save_smite
 
