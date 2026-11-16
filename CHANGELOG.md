@@ -61,12 +61,13 @@ found by reading SMITE's code or by review, and each has a test that fails witho
   not at 0 now warns on save, since SMITE has no origin.
 - `save_smite` threw from inside MAT for a metadata key that is not a MATLAB name or a Dict value
   with non-string keys, after MAT had truncated the target, so saving over an existing file
-  destroyed it. It now checks every key (and every nested Dict's keys) first and throws one
-  `ArgumentError` naming all offending keys. An existing file is written in full to a temporary
-  file first and only then copied into the file in place, so a failed save leaves it as it was
-  and it keeps its owner, permissions and links; a new file whose write fails is removed. A
-  missing folder, a folder at the target, a name that is no file and a file that may not be
-  written are `ArgumentError`s before anything is written.
+  destroyed it. It now checks every key (every nested Dict's and struct array's too) first and
+  throws one `ArgumentError` naming all offending keys. The file is written in full to a
+  temporary file before the target is touched and then copied into place, so a save that fails
+  while writing leaves an existing file as it was (it keeps its owner, permissions and links);
+  only an error during the final copy, such as a full disk, can leave it partly written. A
+  missing folder, a folder at the target, a name that is no file, a file that may not be written
+  and too little free space to rewrite one are `ArgumentError`s before anything is written.
 - A `FrameNum`, `DatasetNum` or `ConnectID` that is not a whole number threw `InexactError`; it
   is now an `ArgumentError` naming the field (`DatasetNum` and `ConnectID` are checked on the
   loaded rows only). So are `XSize`, `YSize`, `NFrames`, `NDatasets` and `ZSize`. An SMD whose

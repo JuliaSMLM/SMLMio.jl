@@ -259,9 +259,9 @@ Load a 3D SMITE SMD into a [`SmiteSMLD`](@ref) of `Emitter3DFit{Float64}`.
 
 Positions load as in [`load_smite_2d`](@ref); `Z` and `Z_SE` are µm in SMITE and load
 unchanged. The file also needs `Z` and `Z_SE` with one value per localization. SMITE's SMD has
-no `ZSize`; when a file has one, it is appended to `metadata["data_size"]`. Everything else
-(optional fields, metadata, `pixel_size`, the errors it throws) is as in
-[`load_smite_2d`](@ref).
+no `ZSize`; when a file has one, it is appended to `metadata["data_size"]`, and a `ZSize` that
+is not a whole number is an `ArgumentError`. Everything else (optional fields, metadata,
+`pixel_size`, the errors it throws) is as in [`load_smite_2d`](@ref).
 
 # Arguments
 - `smd::SmiteSMD`: the file and variable to load.

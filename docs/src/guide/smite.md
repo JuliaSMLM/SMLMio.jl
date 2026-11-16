@@ -91,18 +91,21 @@ save_smite(smld, "output/directory", "processed_Results.mat")
 (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and `pixel_edges_y`. It can be
 a [`SmiteSMLD`](@ref), a `BasicSMLD`, or your own type with `emitters`, `camera`, `n_frames`,
 `n_datasets` and `metadata`. `Emitter2D` and `Emitter3D` cannot be saved. The folder must exist.
-A missing folder, a folder of the file's name, a name that is no file, a file you may not write,
-a camera whose pixels are not uniform and square, and metadata keys that are not MATLAB names
-(an ASCII letter, then up to 62 letters, digits or underscores; Dict values need such string
-keys) are each an `ArgumentError` naming what is wrong, and nothing is written.
+A missing folder, a folder (or anything but a file) of the file's name, a name that is no file,
+an existing file you may not write, too little free space to rewrite one, a camera whose pixels
+are not uniform and square, and metadata keys that are not MATLAB names (an ASCII letter, then up
+to 62 letters, digits or underscores; Dict values need such string keys) are each an
+`ArgumentError` naming what is wrong, and nothing is written.
 
 The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the loaders read. It
 holds no `SMF`, so SMITE tools that also load an `SMF` need one from the original results file.
-A new file is written directly and removed if the write fails. An existing file is written in
-full to a temporary file first and only then copied into the file in place, so a failed save
-leaves it as it was, and it keeps its owner, permissions and links, as with a direct write (for a
-symlink, the file it points to is rewritten). Only an interruption during that last copy can
-leave it partly written. It contains:
+The file is written in full to a temporary file in the system's temporary folder (which needs
+room for one copy) and only then copied into place. So a save that fails while writing (MAT
+refusing a value, the file held open by HDF5 in the same session) leaves an existing file as it
+was and creates none. An existing file keeps its owner, permissions and links, as with a direct
+write (for a symlink, the file it points to is rewritten). An error during the final copy (a full
+disk, a lost network share, an interruption) can leave the file partly written, as with a direct
+write. It contains:
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels. Columns of `Float32` stay MATLAB single.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter

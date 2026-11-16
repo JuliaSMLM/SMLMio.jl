@@ -2,7 +2,7 @@
 # SMITE's pixels and expect the camera fields (XSize, YSize, PixelSize, NDims) in each saved file.
 using SMLMio, Test
 using SMLMCore: SMLMCore, IdealCamera, Emitter2DFit, Emitter3DFit, emitter_ndims
-using MAT: matread, matwrite
+using MAT: matread, matwrite, matopen
 
 mutable struct ForeignEmitter3DFit{T} <: SMLMCore.AbstractEmitter   # for save_smite
     x::T; y::T; z::T; photons::T; bg::T; σ_x::T; σ_y::T; σ_z::T; σ_photons::T; σ_bg::T
@@ -360,15 +360,40 @@ end
             now = read(joinpath(dir, "r.mat"))
             @test_throws r"a\\n" save_smite(mk(Dict{String,Any}("a\n" => 1.0)), dir, "r.mat")
             @test read(joinpath(dir, "r.mat")) == now
-            # MAT writes an array of Dicts as a struct array, Symbol keys included
+            # MAT writes an array of Dicts as a struct array, Symbol keys included; its field
+            # names must be MATLAB names too
+            @test_throws r"bad key" save_smite(mk(Dict{String,Any}("arr" => [Dict("bad key" => 1.0)])), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == now
             save_smite(mk(Dict{String,Any}("arr" => [Dict(:a => 1.0), Dict(:a => 2.0)])), dir, "r.mat")
             @test haskey(matread(joinpath(dir, "r.mat"))["SMD"], "arr")
             @test readdir(dir) == ["r.mat"]
         end
 
+        # The temporary copies live in the system's temporary folder: none may be left there
+        ours() = filter(startswith("smlmio-$(getpid())-"), readdir(tempdir()))
         @testset "a new file whose write fails is not left behind" begin
             @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "new.mat")
             @test readdir(dir) == ["r.mat"]
+            @test isempty(ours())
+        end
+
+        @testset "a file held open by HDF5 is refused and left as it was" begin
+            now = read(joinpath(dir, "r.mat"))
+            io = matopen(joinpath(dir, "r.mat"), "r+")
+            try
+                @test_throws Exception save_smite(good, dir, "r.mat")
+            finally
+                close(io)
+            end
+            @test read(joinpath(dir, "r.mat")) == now
+            @test load_smite_2d(SmiteSMD(dir, "r.mat")).emitters[1].x ≈ 1.0
+            @test isempty(ours())
+        end
+
+        @testset "too little free space is refused before the file is touched" begin
+            now = read(joinpath(dir, "r.mat"))
+            @test_throws r"more bytes" SMLMio._check_space(joinpath(dir, "r.mat"), typemax(Int))
+            @test read(joinpath(dir, "r.mat")) == now
         end
     end
 end
@@ -428,10 +453,25 @@ end
             symlink(joinpath(dir, "Cell_01"), joinpath(dir, "dirlink"))
             @test_throws r"is a folder" save_smite(mk(1.0), dir, "dirlink")
             @test read(joinpath(dir, "Cell_01", "keep.txt"), String) == "keep"
+
+            # Through a symlink to nothing, a save creates the file it points to; a failed one
+            # leaves the link and no file
+            symlink(joinpath(dir, "made.mat"), joinpath(dir, "dangling.mat"))
+            bad = SmiteSMLD{Float64,Emitter2DFit{Float64}}(mk(1.0).emitters, cam, 1, 1,
+                                                           Dict{String,Any}("h" => Float16(1)))
+            @test_throws Exception save_smite(bad, dir, "dangling.mat")
+            @test islink(joinpath(dir, "dangling.mat")) && !isfile(joinpath(dir, "made.mat"))
+            save_smite(mk(7.0), dir, "dangling.mat")
+            @test xof(dir, "made.mat") ≈ 7.0
+
+            # Something that is not a file is refused and stays
+            run(`mkfifo $(joinpath(dir, "fifo"))`)
+            @test_throws r"not a regular file" save_smite(mk(1.0), dir, "fifo")
+            @test ispath(joinpath(dir, "fifo"))
         end
         # Nothing else is left in the folder
         @test issubset(readdir(dir), ["Cell_01", "abs.mat", "mode.mat", "hard.mat", "real.mat",
-                                      "link.mat", "dirlink"])
+                                      "link.mat", "dirlink", "dangling.mat", "made.mat", "fifo"])
     end
 end
 

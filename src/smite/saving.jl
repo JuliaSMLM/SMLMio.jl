@@ -23,8 +23,10 @@ Which fields are written, which are dropped and what a load gives back are on th
 - `nothing`.
 
 # Notes
-- A failed save leaves an existing file as it was and no new file behind; what it refuses and
-  how a file is rewritten are on the [SMITE files](@ref) page.
+- The file is written in full to a temporary file before the target is touched, so a save that
+  fails while writing leaves an existing file as it was; only an error during the final copy
+  (a full disk, a lost share) can leave it partly written. What it refuses, and how a file is
+  rewritten, are on the [SMITE files](@ref) page.
 
 - `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
   load as 0.
@@ -190,13 +192,15 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     return nothing
 end
 
-# Writes the SMD to `target`, never removing anything that was there: a target that is a folder,
-# or a name that is no file, is an ArgumentError. A new file is written directly and removed if
-# the write fails. An existing file is first written in full to a temporary file elsewhere, and
-# only then copied into the file in place, so a failed write leaves it as it was, and the file
-# keeps its owner, group, permissions and links, as a direct write does (a symlink's target file
-# is the one rewritten). Whether the file may be written is the system's answer, as for a direct
-# write. Only an interruption during the final copy can leave the file partly written.
+# Writes the SMD in full to a temporary file in the system's temporary folder, then copies it
+# into `target` in place, as a direct write would: an existing file keeps its owner, group,
+# permissions and links (for a symlink, the file it points to is rewritten), and whether it may be
+# written is the system's answer. Nothing at the target is touched until the new contents are
+# complete, so a failed write (MAT refusing a value, an open HDF5 handle on the file) leaves an
+# existing file as it was. Never removes anything that was there: a folder at the target, a name
+# that is no file, or something other than a file is an ArgumentError. An error during the final
+# copy (a full disk, a lost share, an interruption) can leave the file partly written, as with a
+# direct write; a free-space check before it makes a full disk unlikely.
 function _write_smd(target::String, s)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
@@ -205,37 +209,67 @@ function _write_smd(target::String, s)
     isdir(dir) || throw(ArgumentError(ispath(dir) ? "save_smite: $(repr(dir)) is not a folder" :
                                       "save_smite: the folder $(repr(dir)) does not exist"))
     isdir(target) && throw(ArgumentError("save_smite: $(repr(target)) is a folder"))
-    if !isfile(target)
+    ispath(target) && !isfile(target) &&
+        throw(ArgumentError("save_smite: $(repr(target)) is not a regular file"))
+    existed = isfile(target)
+    if existed
         try
-            matwrite(target, Dict("SMD" => s))
-        catch
-            # Remove the partial new file, never a symlink that was there
-            islink(target) || try rm(target; force=true) catch end
-            rethrow()
+            close(open(target, "r+"))
+        catch e
+            e isa SystemError || rethrow()
+            throw(ArgumentError("save_smite: $(repr(target)) cannot be written: " *
+                                Libc.strerror(e.errnum)))
         end
-        return nothing
     end
-    try
-        close(open(target, "r+"))
-    catch e
-        e isa SystemError || rethrow()
-        throw(ArgumentError("save_smite: $(repr(target)) cannot be written: $(Libc.strerror(e.errnum))"))
-    end
-    tmp = tempname()
+    tmp = joinpath(tempdir(), string("smlmio-", getpid(), "-", time_ns(), ".tmp"))
     try
         matwrite(tmp, Dict("SMD" => s))
-        open(tmp, "r") do src
-            open(target, "w") do dst   # truncates in place: owner, group, mode and links stay
-                buf = Vector{UInt8}(undef, 1 << 20)
-                while !eof(src)
-                    n = readbytes!(src, buf)
-                    write(dst, view(buf, 1:n))
-                end
+        if existed
+            _check_space(target, filesize(tmp) - filesize(target))
+            # HDF5 refuses to recreate a file it holds open, before anything changes
+            close(matopen(target, "w"))
+        end
+        try
+            _copy_into(tmp, target)
+        catch
+            # A new file that could not be finished is removed (through a dangling symlink, the
+            # file it created); the symlink itself stays
+            existed || try
+                rm(islink(target) ? joinpath(dirname(target), readlink(target)) : target; force=true)
+            catch
             end
+            rethrow()
         end
     finally
         rm(tmp; force=true)
     end
+    return nothing
+end
+
+# Copies the file `src` into `dst` in place (truncating it, or creating it).
+function _copy_into(src, dst)
+    open(src, "r") do from
+        open(dst, "w") do to
+            buf = Vector{UInt8}(undef, 1 << 20)
+            while !eof(from)
+                n = readbytes!(from, buf)
+                write(to, view(buf, 1:n))
+            end
+        end
+    end
+end
+
+# Refuses before an existing file is truncated when its folder lacks the extra bytes the new
+# contents need (a quota can still stop the write). Skipped where the system cannot say.
+function _check_space(target, extra)
+    extra > 0 || return nothing
+    free = try
+        diskstat(dirname(realpath(target))).available
+    catch
+        return nothing
+    end
+    free >= extra || throw(ArgumentError("save_smite: $(repr(target)) needs $extra more bytes " *
+                                         "than its folder has free ($free)"))
     return nothing
 end
 
@@ -252,12 +286,20 @@ function _check_mat_keys(s)
         join(bad, ", ")))
 end
 
-function _collect_bad_keys!(bad, path, d::AbstractDict)
+function _collect_bad_keys!(bad, path, d::AbstractDict; symbols::Bool=false)
     for (k, v) in d
-        _is_mat_name(k) || push!(bad, isempty(path) ? "metadata key $(repr(k))" :
-                                      "key $(repr(k)) of the Dict $(path)")
+        ok = symbols && k isa Symbol ? _is_mat_name(string(k)) : _is_mat_name(k)
+        ok || push!(bad, isempty(path) ? "metadata key $(repr(k))" : "key $(repr(k)) of the Dict $(path)")
         name = isempty(path) ? string(k) : string(path, ".", k)
         _collect_bad_keys!(bad, name, v)
+    end
+end
+# An array of Dicts is a MATLAB struct array, whose field names come from the keys; MAT also
+# takes Symbol keys there.
+function _collect_bad_keys!(bad, path, v::AbstractArray)
+    eltype(v) <: Union{Number,AbstractString} && return nothing
+    for x in v
+        x isa AbstractDict ? _collect_bad_keys!(bad, path, x; symbols=true) : _collect_bad_keys!(bad, path, x)
     end
 end
 _collect_bad_keys!(bad, path, _) = nothing
