@@ -15,17 +15,19 @@ Which fields are written, which are dropped and what a load gives back are on th
   `σ_y`, `σ_photons`, `σ_bg`, `frame`, `dataset` and `track_id`, as `Emitter2DFit` and
   `Emitter3DFit` do (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and
   `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved.
-- `filepath::AbstractString`: an existing folder.
-- `filename::AbstractString`: name of the `.mat` file; a file of that name is overwritten.
+- `filepath::AbstractString`: an existing folder that allows new files.
+- `filename::AbstractString`: name of the `.mat` file; a file of that name is replaced and keeps
+  its permissions, and a symlink's target file is replaced.
 
 # Returns
 - `nothing`.
 
 # Notes
-- Throws an `ArgumentError` for a camera whose pixels are not uniform and square, and for a
-  metadata key that is not a MATLAB name or a Dict value with such a key, naming every one,
-  before anything is written. The file is written to a temporary file in `filepath` and replaces
-  the target only on success, so a failed save leaves an existing file as it was.
+- Throws an `ArgumentError`, before anything is written, for a missing folder, a name that is a
+  folder or no file, a read-only file, a camera whose pixels are not uniform and square, and
+  metadata keys that are not MATLAB names (in Dict values too), naming every one. The file is
+  written to a temporary file in the same folder and replaces the target only on success, so a
+  failed save leaves an existing file as it was.
 
 - `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
   load as 0.
@@ -187,20 +189,42 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # MAT truncates the target before it checks a struct's keys. Check them all first, and write
     # to a temporary file in the target's folder that replaces the target only on success.
     _check_mat_keys(s)
-    target = joinpath(String(filepath), String(filename))
-    tmp = joinpath(String(filepath), string(".", filename, ".", getpid(), ".", time_ns(), ".tmp"))
+    _write_smd(joinpath(String(filepath), String(filename)), s)
+    return nothing
+end
+
+# Writes the SMD to a temporary file beside the target, then renames it over the target, so a
+# failed write leaves an existing file as it was. Never removes a folder: a target that is one,
+# or a name that is no file, is an ArgumentError. A symlink is followed (the linked file is
+# replaced, as a direct write would replace its contents), and an existing file keeps its mode.
+function _write_smd(target::String, s)
+    dir, base = splitdir(target)
+    (isempty(base) || base in (".", "..")) &&
+        throw(ArgumentError("save_smite: $(repr(target)) names no file"))
+    isempty(dir) && (dir = ".")
+    isdir(dir) || throw(ArgumentError("save_smite: the folder $(repr(dir)) does not exist"))
+    dest = ispath(target) ? realpath(target) : target
+    isdir(dest) && throw(ArgumentError("save_smite: $(repr(target)) is a folder"))
+    mode = isfile(dest) ? filemode(dest) & 0o777 : nothing
+    mode === nothing || mode & 0o200 != 0 ||
+        throw(ArgumentError("save_smite: $(repr(target)) is read-only"))
+    tmp = joinpath(dirname(dest), string(".smlmio-", getpid(), "-", time_ns(), ".tmp"))
     try
         matwrite(tmp, Dict("SMD" => s))
-        mv(tmp, target; force=true)
+        mode === nothing || chmod(tmp, mode)
+        Base.Filesystem.rename(tmp, dest)   # replaces a file; never deletes a folder
     catch
-        rm(tmp; force=true)
+        try
+            rm(tmp; force=true)
+        catch
+        end
         rethrow()
     end
     return nothing
 end
 
 # MATLAB's names: an ASCII letter, then up to 62 letters, digits or underscores.
-_is_mat_name(k) = k isa AbstractString && occursin(r"^[A-Za-z][A-Za-z0-9_]{0,62}$", k)
+_is_mat_name(k) = k isa AbstractString && occursin(r"\A[A-Za-z][A-Za-z0-9_]{0,62}\z", k)
 
 # Throws one ArgumentError naming every key MAT would refuse: a struct key that is not a MATLAB
 # name, or a key of a Dict value that is not a string. `path` names the Dict inside the SMD.
@@ -217,9 +241,12 @@ function _collect_bad_keys!(bad, path, d::AbstractDict)
         _is_mat_name(k) || push!(bad, isempty(path) ? "metadata key $(repr(k))" :
                                       "key $(repr(k)) of the Dict $(path)")
         name = isempty(path) ? string(k) : string(path, ".", k)
-        v isa AbstractDict && _collect_bad_keys!(bad, name, v)
+        _collect_bad_keys!(bad, name, v)
     end
 end
+# An array of Dicts is a MATLAB struct array: its elements' keys are checked too.
+_collect_bad_keys!(bad, path, v::AbstractArray) =
+    eltype(v) <: Union{Number,AbstractString} || foreach(x -> _collect_bad_keys!(bad, path, x), v)
 _collect_bad_keys!(bad, path, _) = nothing
 
 # The column f(e) for each emitter, in the float type of the emitters' own column `col` when that

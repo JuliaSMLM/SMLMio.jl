@@ -355,6 +355,61 @@ end
             @test load_smite_2d(SmiteSMD(dir, "r.mat")).emitters[1].x ≈ 1.0
             @test readdir(dir) == ["r.mat"]
         end
+
+        @testset "a key with a trailing newline, and keys inside an array of Dicts" begin
+            @test_throws r"a\\n" save_smite(mk(Dict{String,Any}("a\n" => 1.0)), dir, "r.mat")
+            arr = [Dict("ok" => 1.0), Dict("bad key" => 2.0)]
+            @test_throws r"bad key" save_smite(mk(Dict{String,Any}("arr" => arr)), dir, "r.mat")
+            @test readdir(dir) == ["r.mat"]
+        end
+    end
+end
+
+@testset "save_smite never removes a folder, and replaces a file as a write would" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    mk(x) = SmiteSMLD{Float64,Emitter2DFit{Float64}}(
+        [Emitter2DFit{Float64}(x, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1, Dict{String,Any}())
+    xof(dir, name) = load_smite_2d(SmiteSMD(dir, name)).emitters[1].x
+    mktempdir() do dir
+        # A target that is a folder, or a name that is no file: an error, and every file stays
+        mkdir(joinpath(dir, "Cell_01")); write(joinpath(dir, "Cell_01", "keep.txt"), "keep")
+        @test_throws r"is a folder" save_smite(mk(1.0), dir, "Cell_01")
+        for name in ("", ".", "..")
+            @test_throws r"names no file" save_smite(mk(1.0), dir, name)
+        end
+        @test read(joinpath(dir, "Cell_01", "keep.txt"), String) == "keep"
+        @test readdir(dir) == ["Cell_01"]
+
+        # A missing folder is named, not a hidden temporary file
+        err = try save_smite(mk(1.0), joinpath(dir, "missing"), "r.mat"); nothing catch ex; ex end
+        @test err isa ArgumentError && occursin("missing", err.msg) && !occursin(".tmp", err.msg)
+
+        # A file name with a folder in it, and an absolute file name, save as before
+        save_smite(mk(2.0), dir, joinpath("Cell_01", "r.mat"))
+        @test xof(joinpath(dir, "Cell_01"), "r.mat") ≈ 2.0
+        save_smite(mk(3.0), dir, joinpath(dir, "abs.mat"))
+        @test xof(dir, "abs.mat") ≈ 3.0
+
+        # An existing file keeps its permissions; a read-only one is refused and unchanged
+        f = joinpath(dir, "mode.mat")
+        save_smite(mk(1.0), dir, "mode.mat"); chmod(f, 0o640)
+        save_smite(mk(4.0), dir, "mode.mat")
+        @test filemode(f) & 0o777 == 0o640 && xof(dir, "mode.mat") ≈ 4.0
+        chmod(f, 0o440)
+        @test_throws r"read-only" save_smite(mk(5.0), dir, "mode.mat")
+        @test xof(dir, "mode.mat") ≈ 4.0
+        chmod(f, 0o640)
+
+        # A symlink is followed: the linked file is replaced and the link stays a link
+        if !Sys.iswindows()
+            save_smite(mk(1.0), dir, "real.mat")
+            symlink(joinpath(dir, "real.mat"), joinpath(dir, "link.mat"))
+            save_smite(mk(6.0), dir, "link.mat")
+            @test islink(joinpath(dir, "link.mat"))
+            @test xof(dir, "real.mat") ≈ 6.0
+        end
+        # No temporary file is left behind
+        @test !any(startswith(".smlmio-"), readdir(dir))
     end
 end
 
