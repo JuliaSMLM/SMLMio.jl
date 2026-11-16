@@ -1,46 +1,57 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## 0.1.0 (unreleased)
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+- Created from SMLMData 0.7.1's SMITE I/O: `SmiteSMD`, `SmiteSMLD`, `load_smite_2d`,
+  `load_smite_3d`, and `save_smite`, with git history kept.
+- Depends on SMLMCore and MAT; requires Julia 1.10 or later (SMLMCore's floor).
+- Weak dependency on SMLMData >= 0.7.2 guards against two copies of each type
+  beside pre-split SMLMData.
 
-## [Unreleased]
+Fixed relative to SMLMData 0.7.1. The positions, optional-field, empty-result, save-and-load
+and filter-then-save fixes were reproduced on real SMITE results files first; the others were
+found by reading SMITE's code or by review, and each has a test that fails without it:
 
-## [0.4.0] - 2025-01-13
-
-### Added
-- **SCMOSCamera type** for sCMOS camera support with pixel-dependent calibration parameters
-  - `offset`: Dark level in ADU (scalar or per-pixel matrix)
-  - `gain`: Conversion gain in e⁻/ADU (scalar or per-pixel matrix)
-  - `readnoise`: Read noise in e⁻ rms (scalar or per-pixel matrix)
-  - `qe`: Quantum efficiency 0-1 (scalar or per-pixel matrix)
-  - Units match camera specification sheets for easy parameterization
-  - Supports mixed scalar and matrix parameters for flexible calibration
-  - Two constructor forms: `(nx, ny, pixel_size, readnoise; kwargs...)` and `(edges_x, edges_y; kwargs...)`
-- Accessor functions for SCMOSCamera parameters: `get_offset`, `get_gain`, `get_readnoise`, `get_qe`, `get_readnoise_var`
-- Custom display methods showing parameter types (uniform vs per-pixel)
-- Comprehensive test suite with 91 new tests covering:
-  - Scalar and matrix parameter construction
-  - Type stability (Float32/Float64)
-  - Dimension validation
-  - Accessor functions
-  - Realistic use cases (ORCA-Flash4.0, ORCA-Quest specifications)
-
-### Changed
-- Updated type hierarchy documentation to include SCMOSCamera
-- Enhanced README.md with SCMOSCamera examples
-- Expanded api_overview.md with detailed SCMOSCamera usage patterns
-- Version bumped to 0.4.0 (minor version for backward-compatible new feature)
-
-### Notes
-- No breaking changes - purely additive feature
-- IdealCamera remains the default for Poisson-only noise models
-- SCMOSCamera designed for compatibility with future SMLMCamera.jl calibration package
-
-## [0.3.1] - Previous releases
-
-See git history for earlier changes.
-
-[Unreleased]: https://github.com/JuliaSMLM/SMLMData.jl/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/JuliaSMLM/SMLMData.jl/releases/tag/v0.4.0
+- Positions: SMITE stores `X`, `Y`, `X_SE`, `Y_SE` in pixels with (1, 1) the center of the
+  top-left pixel. The loaders kept them as microns (every file loaded 1/PixelSize times too large,
+  outside its camera); they now load `x = (X - 0.5) * PixelSize`, `σ_x = X_SE * PixelSize`, and
+  `save_smite` writes the inverse. `Z` and `Z_SE` are microns in both and unchanged.
+- Files whose `Photons_SE` and `Bg_SE` hold one value per dataset or are empty, or whose
+  `ConnectID` is empty, crashed with a `BoundsError`. Those fields now load
+  as `NaN` (and `ConnectID` as 0, `DatasetNum` as 1), raw values kept in the metadata and listed
+  in `metadata["smite_defaulted_fields"]`; a non-empty field of the wrong length warns. A
+  required field of the wrong length is an `ArgumentError` naming it. Row-vector SMDs load every
+  localization, not only the first.
+- Pixel size: a file without `PixelSize` silently loaded at 0.1 µm per pixel. The loaders now
+  take a `pixel_size` keyword for such files and throw without one; a `pixel_size` that differs
+  from the file's is an error.
+- Results without localizations (`XSize`, `YSize` empty) failed with a `MethodError`; they now
+  throw an `ArgumentError` naming the missing image size.
+- `load_smite_3d` required a `ZSize` field that SMITE never writes.
+- `save_smite` files could not be read back (no `XSize`, `YSize`, `PixelSize`; the loaders'
+  `data_size` and `pixel_size` written as SMD fields). It now writes those from the camera, and
+  `NDims`, and skips the loaders' own metadata; a camera whose pixels are not uniform and square
+  is an `ArgumentError`. `save_smite` takes any `AbstractSMLD`, not only a `SmiteSMLD`.
+- After a filter, or complex screening at load, `save_smite` wrote the SMD fields kept in
+  metadata (`PValue`, `LogLikelihood`, ...) unchanged next to fewer localizations, so they
+  belonged to other localizations. The loaders list SMITE's per-localization fields (catSMD's
+  list) in `metadata["smite_per_localization_fields"]` and record each row's frame and photons;
+  `save_smite` writes those fields by each emitter's file row (`id`) when every emitter is still
+  its row, and otherwise (combined localizations such as frame connection's combined output,
+  another file's emitters) drops them with a warning.
+- Some older SMITE files hold `PValue`, `ThreshFlag`, `XBoxCorner` or `YBoxCorner` with one value
+  per dataset. Saved with as many localizations as values, `save_smite` wrote them where a load
+  (and SMITE) took them for one value per localization; such a field is now dropped with a
+  warning in that case.
+- `save_smite` wrote the loaders' own metadata (`original_file`, `complex_*`) into the file, and
+  loading it back reported the earlier file's name and complex screening. The loaders' entries
+  are now never saved and never taken from a file.
+- `save_smite` wrote counts and indices (`FrameNum`, `DatasetNum`, `ConnectID`, `NFrames`,
+  `NDatasets`) as MATLAB int64; most SMITE results files hold doubles, and MATLAB integer
+  arithmetic rounds. They are now doubles. Optional fields the file left empty and nobody has set
+  since loading are saved empty (an empty `ConnectID` stays empty).
+- The loaders left the file open when reading it failed, and a file without the variable gave a
+  bare `KeyError`; the file is now closed on any error and a missing variable is an
+  `ArgumentError` naming it.
+- `load_smite_2d` on a 3D file now warns that it leaves out `Z`; a camera whose first edge is
+  not at 0 now warns on save, since SMITE has no origin.

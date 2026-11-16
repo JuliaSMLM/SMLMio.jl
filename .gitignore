@@ -1,11 +1,11 @@
-*.jl.*.cov
+# Julia
+Manifest*.toml
 *.jl.cov
+*.jl.*.cov
 *.jl.mem
+
+# Untracked folders (admiral decisions 0009, 0018, 0028)
+/dev/
 docs/build/
-.vscode/*
-Manifest.toml
-examples/.vscode/*
-*.png
-docs/Manifest.toml
-build/
-dev/output/
+examples/output/
+.vscode/

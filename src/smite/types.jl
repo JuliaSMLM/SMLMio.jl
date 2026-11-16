@@ -62,6 +62,19 @@ struct SmiteSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
     metadata::Dict{String,Any}
 end
 
+# Display helpers, copies of SMLMCore's private ones so SMLMio depends only on SMLMCore's public names.
+# Dimension word for display; mixed or empty non-concrete data are labelled as such rather than as 3D.
+function _dim_label(emitters)
+    d = emitter_ndims(emitters)
+    d === nothing && return isempty(emitters) ? "unknown-dimension" : "mixed 2D/3D"
+    return string(d, "D")
+end
+
+# An integer with thousands separators, for display.
+function format_with_commas(n::Integer)
+    return replace(string(n), r"(?<=[0-9])(?=(?:[0-9]{3})+(?![0-9]))" => ",")
+end
+
 # Show method for SmiteSMLD
 function Base.show(io::IO, ::MIME"text/plain", smld::SmiteSMLD{T,E}) where {T,E}
     n_emitters = length(smld.emitters)

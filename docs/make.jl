@@ -1,24 +1,23 @@
-using SMLMData
+using SMLMio
 using Documenter
 
-DocMeta.setdocmeta!(SMLMData, :DocTestSetup, :(using SMLMData); recursive=true)
-
 makedocs(;
-    modules=[SMLMData],
-    sitename="SMLMData.jl",
+    modules=[SMLMio],
+    sitename="SMLMio.jl",
+    checkdocs=:exports,
+    doctest=false, # QA runs every docstring's jldoctest, decision 0018.
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://JuliaSMLM.github.io/SMLMData.jl",
-        assets=String[],
+        canonical="https://JuliaSMLM.github.io/SMLMio.jl",
     ),
     pages=[
         "Home" => "index.md",
-        "Saving and Loading" => "io.md",
-        "API Reference" => "api.md",
+        "SMITE files" => "smite.md",
+        "API" => "api.md",
     ],
 )
 
 deploydocs(;
-    repo="github.com/JuliaSMLM/SMLMData.jl",
-    devbranch = "main" 
+    repo="github.com/JuliaSMLM/SMLMio.jl.git",
+    devbranch="main",
 )
