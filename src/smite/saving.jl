@@ -192,16 +192,10 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     return nothing
 end
 
-# Writes the SMD in full to a temporary file in the system's temporary folder, then copies it
-# into `target` in place, as a direct write would: an existing file keeps its owner, group,
-# permissions and links (for a symlink, the file it points to is rewritten), and whether it may be
-# written is the system's answer. Nothing at the target is touched until the new contents are
-# complete, so a failed write (MAT refusing a value, an open HDF5 handle on the file) leaves an
-# existing file as it was. Never removes anything that was there: a folder at the target, a name
-# that is no file, or something other than a file is an ArgumentError. An error during the final
-# copy (a full disk, a lost share, an interruption) can leave the file partly written, as with a
-# direct write; a free-space check before it makes a full disk unlikely.
-function _write_smd(target::String, s)
+# The whole file is written to a temporary file first and copied into place only when complete,
+# in place so that an existing file keeps its owner, group, permissions and links; the guide's
+# SMITE files page states the rules. `copy` is a seam for tests.
+function _write_smd(target::String, s; copy=_copy_into)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
         throw(ArgumentError("save_smite: $(repr(target)) names no file"))
@@ -209,6 +203,8 @@ function _write_smd(target::String, s)
     isdir(dir) || throw(ArgumentError(ispath(dir) ? "save_smite: $(repr(dir)) is not a folder" :
                                       "save_smite: the folder $(repr(dir)) does not exist"))
     isdir(target) && throw(ArgumentError("save_smite: $(repr(target)) is a folder"))
+    islink(target) && !ispath(target) &&
+        throw(ArgumentError("save_smite: $(repr(target)) is a symlink to nothing"))
     ispath(target) && !isfile(target) &&
         throw(ArgumentError("save_smite: $(repr(target)) is not a regular file"))
     existed = isfile(target)
@@ -230,14 +226,10 @@ function _write_smd(target::String, s)
             close(matopen(target, "w"))
         end
         try
-            _copy_into(tmp, target)
+            copy(tmp, target)
         catch
-            # A new file that could not be finished is removed (through a dangling symlink, the
-            # file it created); the symlink itself stays
-            existed || try
-                rm(islink(target) ? joinpath(dirname(target), readlink(target)) : target; force=true)
-            catch
-            end
+            # A new file that could not be finished is removed
+            existed || try rm(target; force=true) catch end
             rethrow()
         end
     finally
@@ -260,14 +252,17 @@ function _copy_into(src, dst)
 end
 
 # Refuses before an existing file is truncated when its folder lacks the extra bytes the new
-# contents need (a quota can still stop the write). Skipped where the system cannot say.
+# contents need (a quota can still stop the write). Skipped where the system cannot say,
+# including a file system that reports no size at all.
 function _check_space(target, extra)
     extra > 0 || return nothing
-    free = try
-        diskstat(dirname(realpath(target))).available
+    st = try
+        diskstat(dirname(realpath(target)))
     catch
         return nothing
     end
+    st.total == 0 && return nothing
+    free = st.available
     free >= extra || throw(ArgumentError("save_smite: $(repr(target)) needs $extra more bytes " *
                                          "than its folder has free ($free)"))
     return nothing

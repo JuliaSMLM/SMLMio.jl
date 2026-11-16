@@ -91,16 +91,18 @@ save_smite(smld, "output/directory", "processed_Results.mat")
 (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and `pixel_edges_y`. It can be
 a [`SmiteSMLD`](@ref), a `BasicSMLD`, or your own type with `emitters`, `camera`, `n_frames`,
 `n_datasets` and `metadata`. `Emitter2D` and `Emitter3D` cannot be saved. The folder must exist.
-A missing folder, a folder (or anything but a file) of the file's name, a name that is no file,
-an existing file you may not write, too little free space to rewrite one, a camera whose pixels
+A missing folder, a folder (or anything but a file) of the file's name, a symlink to nothing, a
+name that is no file, an existing file you may not write, too little free space to rewrite one
+(where the system reports it), a camera whose pixels
 are not uniform and square, and metadata keys that are not MATLAB names (an ASCII letter, then up
 to 62 letters, digits or underscores; Dict values need such string keys) are each an
 `ArgumentError` naming what is wrong, and nothing is written.
 
 The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the loaders read. It
 holds no `SMF`, so SMITE tools that also load an `SMF` need one from the original results file.
-The file is written in full to a temporary file in the system's temporary folder (which needs
-room for one copy) and only then copied into place. So a save that fails while writing (MAT
+The file is written in full to a temporary file in the system's temporary folder (`tempdir()`,
+which `TMPDIR` sets on Linux and macOS; it must exist and have room for one copy) and only then
+copied into place. So a save that fails while writing (MAT
 refusing a value, the file held open by HDF5 in the same session) leaves an existing file as it
 was and creates none. An existing file keeps its owner, permissions and links, as with a direct
 write (for a symlink, the file it points to is rewritten). An error during the final copy (a full

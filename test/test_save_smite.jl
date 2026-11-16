@@ -395,6 +395,18 @@ end
             @test_throws r"more bytes" SMLMio._check_space(joinpath(dir, "r.mat"), typemax(Int))
             @test read(joinpath(dir, "r.mat")) == now
         end
+
+        @testset "a final copy that fails: a new file is removed, no temporary file stays" begin
+            failing(src, dst) = (write(dst, "partial"); error("disk full"))
+            s = Dict{String,Any}("X" => [1.0])
+            @test_throws r"disk full" SMLMio._write_smd(joinpath(dir, "new2.mat"), s; copy=failing)
+            @test !ispath(joinpath(dir, "new2.mat"))
+            @test isempty(ours())
+            # An existing file is then partly written, as documented; the temporary file goes
+            @test_throws r"disk full" SMLMio._write_smd(joinpath(dir, "r.mat"), s; copy=failing)
+            @test read(joinpath(dir, "r.mat"), String) == "partial"
+            @test isempty(ours())
+        end
     end
 end
 
@@ -454,15 +466,10 @@ end
             @test_throws r"is a folder" save_smite(mk(1.0), dir, "dirlink")
             @test read(joinpath(dir, "Cell_01", "keep.txt"), String) == "keep"
 
-            # Through a symlink to nothing, a save creates the file it points to; a failed one
-            # leaves the link and no file
+            # A symlink to nothing is refused, and the link stays
             symlink(joinpath(dir, "made.mat"), joinpath(dir, "dangling.mat"))
-            bad = SmiteSMLD{Float64,Emitter2DFit{Float64}}(mk(1.0).emitters, cam, 1, 1,
-                                                           Dict{String,Any}("h" => Float16(1)))
-            @test_throws Exception save_smite(bad, dir, "dangling.mat")
-            @test islink(joinpath(dir, "dangling.mat")) && !isfile(joinpath(dir, "made.mat"))
-            save_smite(mk(7.0), dir, "dangling.mat")
-            @test xof(dir, "made.mat") ≈ 7.0
+            @test_throws r"symlink to nothing" save_smite(mk(7.0), dir, "dangling.mat")
+            @test islink(joinpath(dir, "dangling.mat")) && !ispath(joinpath(dir, "made.mat"))
 
             # Something that is not a file is refused and stays
             run(`mkfifo $(joinpath(dir, "fifo"))`)
@@ -471,7 +478,7 @@ end
         end
         # Nothing else is left in the folder
         @test issubset(readdir(dir), ["Cell_01", "abs.mat", "mode.mat", "hard.mat", "real.mat",
-                                      "link.mat", "dirlink", "dangling.mat", "made.mat", "fifo"])
+                                      "link.mat", "dirlink", "dangling.mat", "fifo"])
     end
 end
 
