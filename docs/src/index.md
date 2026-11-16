@@ -41,4 +41,5 @@ mktempdir() do dir
 end
 ```
 
-See [SMITE files](smite.md) for file-based workflows and the [API](api.md) for all exported names.
+See the [Tutorial](tutorial.md) for a worked example, [SMITE files](guide/smite.md) for file-based
+workflows and the [API](api.md) for all exported names.

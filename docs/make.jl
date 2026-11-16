@@ -13,7 +13,8 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
-        "SMITE files" => "smite.md",
+        "Tutorial" => "tutorial.md",
+        "Guide" => ["SMITE files" => "guide/smite.md"],
         "API" => "api.md",
     ],
 )
