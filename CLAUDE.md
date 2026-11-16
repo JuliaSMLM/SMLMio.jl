@@ -2,7 +2,8 @@
 
 SMLMio provides the lab's SMLM file formats, currently SMITE `.mat` I/O.
 It holds SMLMData 0.7.1's SMITE code with its bugs fixed (see CHANGELOG.md); shared data types
-live in SMLMCore. SMLMData loads and re-exports both packages.
+live in SMLMCore. From SMLMData 0.7.2 (not yet released), SMLMData loads and re-exports both
+packages.
 
 SMITE stores X, Y, X_SE, Y_SE in pixels, (1, 1) the center of the top-left pixel; SMLMio's
 positions are microns from the camera's corner.

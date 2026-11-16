@@ -9,10 +9,12 @@ makedocs(;
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
         canonical="https://JuliaSMLM.github.io/SMLMio.jl",
+        edit_link="main", # skip asking the remote for its default branch
     ),
     pages=[
         "Home" => "index.md",
-        "SMITE files" => "smite.md",
+        "Tutorial" => "tutorial.md",
+        "Guide" => ["SMITE files" => "guide/smite.md"],
         "API" => "api.md",
     ],
 )

@@ -2,7 +2,7 @@
 # SMITE's pixels and expect the camera fields (XSize, YSize, PixelSize, NDims) in each saved file.
 using SMLMio, Test
 using SMLMCore: SMLMCore, IdealCamera, Emitter2DFit, Emitter3DFit, emitter_ndims
-using MAT: matread, matwrite
+using MAT: matread, matwrite, matopen
 
 mutable struct ForeignEmitter3DFit{T} <: SMLMCore.AbstractEmitter   # for save_smite
     x::T; y::T; z::T; photons::T; bg::T; σ_x::T; σ_y::T; σ_z::T; σ_photons::T; σ_bg::T
@@ -299,4 +299,214 @@ end
             @test_logs save_smite(sm(A[]), dir, "e.mat")        # empty data lose nothing
         end
     end
+end
+
+@testset "save_smite checks keys first and never destroys a file" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    e = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    mk(md) = SmiteSMLD{Float64,Emitter2DFit{Float64}}([e], cam, 1, 1, md)
+    good = mk(Dict{String,Any}("analysis_date" => "today"))
+    mktempdir() do dir
+        save_smite(good, dir, "r.mat")
+        before = read(joinpath(dir, "r.mat"))
+
+        @testset "invalid keys are named, one error, file untouched" begin
+            md = Dict{String,Any}("analysis date" => 1.0, "γ" => 2.0, "1st_pass" => 3.0,
+                                  "a" ^ 64 => 4.0, "drift-model" => 5.0, "fine_key" => 6.0,
+                                  "monomer_D" => Dict(1 => 0.1, 2 => 0.2),
+                                  "nested" => Dict("ok" => 1.0, "bad key" => 2.0))
+            err = try save_smite(mk(md), dir, "r.mat"); nothing catch ex; ex end
+            @test err isa ArgumentError
+            msg = err.msg
+            for k in ("analysis date", "γ", "1st_pass", "a" ^ 64, "drift-model", "monomer_D", "bad key")
+                @test occursin(k, msg)
+            end
+            @test occursin("key 1 of the Dict monomer_D", msg)
+            @test occursin("key 2 of the Dict monomer_D", msg)
+            @test !occursin("fine_key", msg)
+            @test read(joinpath(dir, "r.mat")) == before
+            @test readdir(dir) == ["r.mat"]
+            # No file is created either when there was none
+            @test_throws ArgumentError save_smite(mk(md), dir, "new.mat")
+            @test !isfile(joinpath(dir, "new.mat"))
+            @test readdir(dir) == ["r.mat"]
+        end
+
+        @testset "a Dict with Symbol keys is named too" begin
+            @test_throws r"sym" save_smite(mk(Dict{String,Any}("sym" => Dict(:a => 1.0))), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == before
+        end
+
+        @testset "a write that fails midway leaves the existing file" begin
+            # MAT cannot write Float16: the failure comes from matwrite, after the keys check
+            @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == before
+            @test readdir(dir) == ["r.mat"]
+        end
+
+        @testset "normal saves are unaffected" begin
+            ok = mk(Dict{String,Any}("analysis_date" => "later", "a" => "a" ^ 100,
+                                     "z" ^ 63 => 1.0, "inner" => Dict("k_1" => 2.0)))
+            @test_logs save_smite(ok, dir, "r.mat")   # overwrites the existing file
+            smd = matread(joinpath(dir, "r.mat"))["SMD"]
+            @test smd["analysis_date"] == "later"
+            @test smd["inner"]["k_1"] == 2.0
+            @test haskey(smd, "z" ^ 63)
+            @test load_smite_2d(SmiteSMD(dir, "r.mat")).emitters[1].x ≈ 1.0
+            @test readdir(dir) == ["r.mat"]
+        end
+
+        @testset "a key with a trailing newline; arrays of Dicts" begin
+            now = read(joinpath(dir, "r.mat"))
+            @test_throws r"a\\n" save_smite(mk(Dict{String,Any}("a\n" => 1.0)), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == now
+            # MAT writes an array of Dicts as a struct array: its keys must be MATLAB names and
+            # strings (MAT 0.10 refuses Symbol keys there; newer MAT takes them)
+            @test_throws r"bad key" save_smite(mk(Dict{String,Any}("arr" => [Dict("bad key" => 1.0)])), dir, "r.mat")
+            @test_throws r":a" save_smite(mk(Dict{String,Any}("arr" => [Dict(:a => 1.0)])), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == now
+            save_smite(mk(Dict{String,Any}("arr" => [Dict("a" => 1.0), Dict("a" => 2.0)])), dir, "r.mat")
+            @test haskey(matread(joinpath(dir, "r.mat"))["SMD"], "arr")
+            @test readdir(dir) == ["r.mat"]
+        end
+
+        # The temporary copies live in the system's temporary folder: none may be left there
+        ours() = filter(startswith("smlmio-$(getpid())-"), readdir(tempdir()))
+        @testset "a new file whose write fails is not left behind" begin
+            @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "new.mat")
+            @test readdir(dir) == ["r.mat"]
+            @test isempty(ours())
+        end
+
+        @testset "a file held open by HDF5 is refused and left as it was" begin
+            # A read-only handle: closing a read-write one updates the file's HDF5 header itself
+            now = read(joinpath(dir, "r.mat"))
+            io = matopen(joinpath(dir, "r.mat"), "r")
+            try
+                @test_throws Exception save_smite(good, dir, "r.mat")
+            finally
+                close(io)
+            end
+            @test read(joinpath(dir, "r.mat")) == now
+            @test load_smite_2d(SmiteSMD(dir, "r.mat")).emitters[1].x ≈ 1.0
+            @test isempty(ours())
+        end
+
+        @testset "too little free space is refused before the file is touched" begin
+            now = read(joinpath(dir, "r.mat"))
+            @test_throws r"more bytes" SMLMio._check_space(joinpath(dir, "r.mat"), typemax(Int))
+            @test read(joinpath(dir, "r.mat")) == now
+        end
+
+        @testset "a final copy that fails: a new file is removed, no temporary file stays" begin
+            failing(src, dst) = (write(dst, "partial"); error("disk full"))
+            s = Dict{String,Any}("X" => [1.0])
+            @test_throws r"disk full" SMLMio._write_smd(joinpath(dir, "new2.mat"), s; copy=failing)
+            @test !ispath(joinpath(dir, "new2.mat"))
+            @test isempty(ours())
+            # An existing file is then partly written, as documented, and the error says so; the
+            # temporary file goes
+            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; copy=failing); nothing catch ex; ex end
+            @test err isa ErrorException
+            @test occursin("incomplete", err.msg) && occursin("save again", err.msg) &&
+                  occursin("disk full", err.msg)
+            @test read(joinpath(dir, "r.mat"), String) == "partial"
+            @test isempty(ours())
+        end
+    end
+end
+
+@testset "save_smite never removes a folder, and replaces a file as a write would" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    mk(x) = SmiteSMLD{Float64,Emitter2DFit{Float64}}(
+        [Emitter2DFit{Float64}(x, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1, Dict{String,Any}())
+    xof(dir, name) = load_smite_2d(SmiteSMD(dir, name)).emitters[1].x
+    mktempdir() do dir
+        # A target that is a folder, or a name that is no file: an error, and every file stays
+        mkdir(joinpath(dir, "Cell_01")); write(joinpath(dir, "Cell_01", "keep.txt"), "keep")
+        @test_throws r"is a folder" save_smite(mk(1.0), dir, "Cell_01")
+        for name in ("", ".", "..")
+            @test_throws r"names no file" save_smite(mk(1.0), dir, name)
+        end
+        @test read(joinpath(dir, "Cell_01", "keep.txt"), String) == "keep"
+        @test readdir(dir) == ["Cell_01"]
+
+        # A missing folder, or a folder argument that is a file, is named
+        err = try save_smite(mk(1.0), joinpath(dir, "missing"), "r.mat"); nothing catch ex; ex end
+        @test err isa ArgumentError && occursin("missing", err.msg) && occursin("does not exist", err.msg)
+        write(joinpath(dir, "afile"), "x")
+        @test_throws r"is not a folder" save_smite(mk(1.0), joinpath(dir, "afile"), "r.mat")
+        rm(joinpath(dir, "afile"))
+
+        # A file name with a folder in it, and an absolute file name, save as before
+        save_smite(mk(2.0), dir, joinpath("Cell_01", "r.mat"))
+        @test xof(joinpath(dir, "Cell_01"), "r.mat") ≈ 2.0
+        save_smite(mk(3.0), dir, joinpath(dir, "abs.mat"))
+        @test xof(dir, "abs.mat") ≈ 3.0
+
+        # An existing file is rewritten in place, as a direct write would: it keeps its
+        # permissions and its hard links, and a file the system will not let us write is refused
+        # and unchanged (POSIX permissions; CI runs on Linux)
+        if !Sys.iswindows()
+            f = joinpath(dir, "mode.mat")
+            save_smite(mk(1.0), dir, "mode.mat"); chmod(f, 0o640)
+            hardlink(f, joinpath(dir, "hard.mat"))
+            save_smite(mk(4.0), dir, "mode.mat")
+            @test filemode(f) & 0o777 == 0o640 && xof(dir, "mode.mat") ≈ 4.0
+            @test xof(dir, "hard.mat") ≈ 4.0   # the same file, not a replaced one
+            chmod(f, 0o440)
+            if Libc.geteuid() != 0   # root may write any file
+                @test_throws r"cannot be written" save_smite(mk(5.0), dir, "mode.mat")
+                @test xof(dir, "mode.mat") ≈ 4.0
+            end
+            chmod(f, 0o640)
+
+            # A symlink is followed: the linked file is rewritten and the link stays a link; a
+            # symlink to a folder is a folder
+            save_smite(mk(1.0), dir, "real.mat")
+            symlink(joinpath(dir, "real.mat"), joinpath(dir, "link.mat"))
+            save_smite(mk(6.0), dir, "link.mat")
+            @test islink(joinpath(dir, "link.mat"))
+            @test xof(dir, "real.mat") ≈ 6.0
+            symlink(joinpath(dir, "Cell_01"), joinpath(dir, "dirlink"))
+            @test_throws r"is a folder" save_smite(mk(1.0), dir, "dirlink")
+            @test read(joinpath(dir, "Cell_01", "keep.txt"), String) == "keep"
+
+            # A symlink to nothing is refused, and the link stays
+            symlink(joinpath(dir, "made.mat"), joinpath(dir, "dangling.mat"))
+            @test_throws r"symlink to nothing" save_smite(mk(7.0), dir, "dangling.mat")
+            @test islink(joinpath(dir, "dangling.mat")) && !ispath(joinpath(dir, "made.mat"))
+
+            # Something that is not a file is refused and stays
+            run(`mkfifo $(joinpath(dir, "fifo"))`)
+            @test_throws r"not a regular file" save_smite(mk(1.0), dir, "fifo")
+            @test ispath(joinpath(dir, "fifo"))
+        end
+        # Nothing else is left in the folder
+        @test issubset(readdir(dir), ["Cell_01", "abs.mat", "mode.mat", "hard.mat", "real.mat",
+                                      "link.mat", "dirlink", "dangling.mat", "fifo"])
+    end
+end
+
+@testset "paths of any string type; SmiteSMD shows its whole path" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    e = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    smld = SmiteSMLD{Float64,Emitter2DFit{Float64}}([e], cam, 1, 1, Dict{String,Any}())
+    mktempdir() do dir
+        sub(s) = SubString(string("xx", s, "yy"), 3, 2 + length(s))
+        save_smite(smld, sub(dir), sub("sub.mat"))
+        @test isfile(joinpath(dir, "sub.mat"))
+        smd = SmiteSMD(sub(dir), sub("sub.mat"))
+        @test smd isa SmiteSMD && smd.filepath isa String && smd.filename isa String
+        @test SmiteSMD(sub(dir), sub("sub.mat"), sub("SMD")).varname == "SMD"
+        @test load_smite_2d(smd).emitters[1].x ≈ 1.0
+        # Mutable as before
+        smd.filename = sub("other.mat")
+        @test smd.filename == "other.mat" && smd.filename isa String
+    end
+
+    smd = SmiteSMD("/a/b/c", "x.mat")
+    @test repr(smd) == "SmiteSMD(\"/a/b/c\", \"x.mat\", \"SMD\")"
+    @test repr(eval(Meta.parse(repr(smd)))) == repr(smd)   # it reads as the constructor call it is
+    @test occursin("/a/b/c", sprint(show, MIME("text/plain"), smd))
 end

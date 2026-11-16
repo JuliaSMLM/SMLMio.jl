@@ -26,5 +26,5 @@ jobs:
   ci:
     uses: LidkeLab/.github/.github/workflows/julia-ci.yml@v2
     with:
-      registered: false
+      registered: true
       runic: false

@@ -1,68 +1,52 @@
 """
-    save_smite(smld::AbstractSMLD, filepath::String, filename::String)
+    save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::AbstractString) -> nothing
 
-Save SMLD data to SMITE's SMD .mat format (MATLAB v7.3), readable by `load_smite_2d`,
-`load_smite_3d` and SMITE.
+Save an SMLD as an `SMD` variable in a SMITE `.mat` file (MATLAB v7.3), which the loaders read.
+
+Positions convert from µm to SMITE's pixels, (1, 1) the center of the camera's top-left pixel:
+`X = (x - x_edge) / pixel_size + 0.5` and `X_SE = σ_x / pixel_size` (the same for `y`), with
+`x_edge` the camera's first pixel edge. `Z` and `Z_SE` are µm in both. The file holds no `SMF`.
+Which fields are written, which are dropped and what a load gives back are on the
+[SMITE files](@ref) page.
 
 # Arguments
-- `smld::AbstractSMLD`: SMLD object to save (a `SmiteSMLD`, a `BasicSMLD` or any other SMLD
-  with `emitters`, `camera`, `n_frames`, `n_datasets` and `metadata`)
-- `filepath::String`: Directory path where to save the file
-- `filename::String`: Name of the output .mat file
+- `smld::AbstractSMLD`: an SMLD (`SmiteSMLD`, `BasicSMLD`, or your own with `emitters`, `camera`,
+  `n_frames`, `n_datasets` and `metadata`) whose emitters have `x`, `y`, `photons`, `bg`, `σ_x`,
+  `σ_y`, `σ_photons`, `σ_bg`, `frame`, `dataset` and `track_id`, as `Emitter2DFit` and
+  `Emitter3DFit` do (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and
+  `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved.
+- `filepath::AbstractString`: an existing folder.
+- `filename::AbstractString`: name of the `.mat` file; an existing file of that name is
+  rewritten.
 
-# What it writes
-- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, (1, 1) the center of the camera's top-left pixel:
-  `X = (x - x_edge) / pixel_size + 0.5`, `X_SE = σ_x / pixel_size`, with `x_edge` the camera's
-  first pixel edge, in the emitters' float type. SMITE has no origin: a camera whose first edge
-  is not at 0 warns, and the file loads back with the camera at 0 and the positions moved by
-  that offset.
-- `Photons`, `Bg`, their standard errors, `FrameNum`, `DatasetNum` and `ConnectID` (the track
-  id). Counts and indices are written as doubles, as most SMITE results files hold them (some
-  hold `ConnectID` as uint32; MATLAB integer arithmetic would round).
-- `Z` and `Z_SE` (microns) for `Emitter3DFit` emitters, or for non-empty 3D data
-  (`emitter_ndims`) whose every emitter has properties `z` and `σ_z` and whose `z` and `σ_z`
-  columns are each all `Float32` or all `Float64` (MATLAB single or double; MAT.jl cannot write
-  `Float16`, `Rational`, `BigFloat` or `missing`, and writes a mixed column as a cell). Non-empty
-  3D or mixed 2D/3D data without such columns save without `Z`, with a warning: an SMD has one
-  `Z` column for all localizations, so save 2D and 3D data separately to keep it.
-- `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets`, and `NDims` (3 with
-  `Z`, else 2). SMITE has one pixel size, so a camera whose pixels are not uniform and square is
-  an `ArgumentError`. An sCMOS camera's calibration maps are not saved; the file loads back
-  with an `IdealCamera`.
-- Every metadata entry that is not an emitter column, except the loaders' own entries:
-  `original_file`, `data_size`, `pixel_size`, `smite_defaulted_fields`,
-  `smite_per_localization_fields`, `smite_row_frames`, `smite_row_photons`,
-  `complex_fields_removed`, `complex_fields`, `original_emitter_count` and
-  `removed_emitter_count`.
-- SMITE's per-localization fields a loader kept (`metadata["smite_per_localization_fields"]`:
-  `PValue`, `LogLikelihood`, `PSFSigma`, ...) for the saved emitters' file rows, the row being
-  each emitter's `id`, when every emitter is still the row its `id` names: the same frame and
-  photons the loader recorded for that row (`metadata["smite_row_frames"]`,
-  `metadata["smite_row_photons"]`). Otherwise (combined localizations such as frame
-  connection's combined output, emitters joined from another file, changed frames or photons,
-  ids that are not rows, no row record) those fields are dropped with a warning; so is a field
-  replaced since loading that no longer has one value per file row. A listed field edited or
-  replaced after loading must still hold one value per file row, in file-row order (index it by
-  `id`): it is written by row, so values set in another order come out next to other
-  localizations. `metadata["smite_per_localization_fields"]` is what tells `save_smite` this;
-  deleting it makes it write those fields as ordinary metadata.
-- A field SMITE stacks per localization that is not listed in
-  `metadata["smite_per_localization_fields"]` (the file held it with other than one value per
-  row, often one per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files; or
-  it was added after loading) as it is, unless the saved localizations are as many as its
-  values: then a load would take it for one value per localization, and it is dropped with a
-  warning. To save such a field per localization, list it there with one value per file row.
-  This applies to data loaded from SMITE; metadata on other data is written as given.
-- An optional field the file left empty (`ConnectID` before frame connection, ...), which the
-  loader defaulted, back empty while it still holds only the default. A `Photons_SE` or `Bg_SE`
-  the file held with one value per dataset is saved as the `NaN` it loaded as; its per-dataset
-  values are not saved.
+# Returns
+- `nothing`.
 
-Not saved: `σ_xy` (SMITE has no such field; it loads back as 0) and the emitter `id`, which
-loads back as the row in the new file. A type whose `propertynames` lists a property that
-`getproperty` refuses breaks Julia's property interface and is not supported.
+# Notes
+- The file is written in full to a temporary file before the target is touched, so a save that
+  fails while writing leaves an existing file as it was; only an error during the final copy
+  (a full disk, a lost share) can leave it partly written. What it refuses, and how a file is
+  rewritten, are on the [SMITE files](@ref) page.
+
+- `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
+  load as 0.
+
+# Example
+```jldoctest
+julia> using SMLMCore: IdealCamera, Emitter2DFit, BasicSMLD
+
+julia> smld = BasicSMLD([Emitter2DFit{Float64}(1.0, 2.0, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)], IdealCamera(64, 64, 0.1), 1, 1);
+
+julia> dir = mktempdir(); save_smite(smld, dir, "localizations.mat")
+
+julia> e = load_smite_2d(SmiteSMD(dir, "localizations.mat")).emitters[1]; (e.x, e.y)
+(1.0, 2.0)
+```
+
+# See also
+[`load_smite_2d`](@ref), [`load_smite_3d`](@ref), [`SmiteSMD`](@ref)
 """
-function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
+function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::AbstractString)
     # Create SMD structure
     s = Dict{String,Any}()
 
@@ -201,9 +185,121 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     zcols === nothing && !isempty(smld.emitters) && haskey(s, "Z") &&
         _smite_length(s["Z"]) == length(smld.emitters) && (s["NDims"] = 3.0)
     
-    # Save to file
-    matwrite(joinpath(filepath, filename), Dict("SMD" => s))
+    # MAT truncates the target before it checks a struct's keys. Check them all first; an
+    # existing file is rewritten only once the new contents are complete.
+    _check_mat_keys(s)
+    _write_smd(joinpath(String(filepath), String(filename)), s)
+    return nothing
 end
+
+# The whole file is written to a temporary file first and copied into place only when complete,
+# in place so that an existing file keeps its owner, group, permissions and links; the guide's
+# SMITE files page states the rules. `copy` is a seam for tests.
+function _write_smd(target::String, s; copy=_copy_into)
+    dir, base = splitdir(target)
+    (isempty(base) || base in (".", "..")) &&
+        throw(ArgumentError("save_smite: $(repr(target)) names no file"))
+    isempty(dir) && (dir = ".")
+    isdir(dir) || throw(ArgumentError(ispath(dir) ? "save_smite: $(repr(dir)) is not a folder" :
+                                      "save_smite: the folder $(repr(dir)) does not exist"))
+    isdir(target) && throw(ArgumentError("save_smite: $(repr(target)) is a folder"))
+    islink(target) && !ispath(target) &&
+        throw(ArgumentError("save_smite: $(repr(target)) is a symlink to nothing"))
+    ispath(target) && !isfile(target) &&
+        throw(ArgumentError("save_smite: $(repr(target)) is not a regular file"))
+    existed = isfile(target)
+    if existed
+        try
+            close(open(target, "r+"))
+        catch e
+            e isa SystemError || rethrow()
+            throw(ArgumentError("save_smite: $(repr(target)) cannot be written: " *
+                                Libc.strerror(e.errnum)))
+        end
+    end
+    tmp = joinpath(tempdir(), string("smlmio-", getpid(), "-", time_ns(), ".tmp"))
+    try
+        matwrite(tmp, Dict("SMD" => s))
+        if existed
+            _check_space(target, filesize(tmp) - filesize(target))
+            # HDF5 refuses to recreate a file it holds open, before anything changes
+            close(matopen(target, "w"))
+        end
+        try
+            copy(tmp, target)
+        catch e
+            # A new file that could not be finished is removed
+            existed || (try rm(target; force=true) catch end; rethrow())
+            e isa InterruptException && rethrow()
+            # An existing file was truncated: say so, and that the data can be saved again
+            error("save_smite: writing $(repr(target)) failed partway, so that file is now " *
+                  "incomplete and its old contents are gone. The data are unchanged in memory: " *
+                  "save again once the cause is fixed. The error was: $(sprint(showerror, e))")
+        end
+    finally
+        rm(tmp; force=true)
+    end
+    return nothing
+end
+
+# Copies the file `src` into `dst` in place (truncating it, or creating it).
+function _copy_into(src, dst)
+    open(src, "r") do from
+        open(dst, "w") do to
+            buf = Vector{UInt8}(undef, 1 << 20)
+            while !eof(from)
+                n = readbytes!(from, buf)
+                write(to, view(buf, 1:n))
+            end
+        end
+    end
+end
+
+# Refuses before an existing file is truncated when its folder lacks the extra bytes the new
+# contents need (a quota can still stop the write). Skipped where the system cannot say,
+# including a file system that reports no size at all.
+function _check_space(target, extra)
+    extra > 0 || return nothing
+    st = try
+        diskstat(dirname(realpath(target)))
+    catch
+        return nothing
+    end
+    st.total == 0 && return nothing
+    free = st.available
+    free >= extra || throw(ArgumentError("save_smite: $(repr(target)) needs $extra more bytes " *
+                                         "than its folder has free ($free)"))
+    return nothing
+end
+
+# MATLAB's names: an ASCII letter, then up to 62 letters, digits or underscores.
+_is_mat_name(k) = k isa AbstractString && occursin(r"\A[A-Za-z][A-Za-z0-9_]{0,62}\z", k)
+
+# Throws one ArgumentError naming every key MAT would refuse: a struct key that is not a MATLAB
+# name, or a key of a Dict value that is not a string. `path` names the Dict inside the SMD.
+function _check_mat_keys(s)
+    bad = String[]
+    _collect_bad_keys!(bad, "", s)
+    isempty(bad) || throw(ArgumentError("save_smite: MATLAB cannot store these keys; a key must be " *
+        "a string of an ASCII letter, then up to 62 letters, digits or underscores: " *
+        join(bad, ", ")))
+end
+
+function _collect_bad_keys!(bad, path, d::AbstractDict)
+    for (k, v) in d
+        _is_mat_name(k) || push!(bad, isempty(path) ? "metadata key $(repr(k))" :
+                                      "key $(repr(k)) of the Dict $(path)")
+        name = isempty(path) ? string(k) : string(path, ".", k)
+        _collect_bad_keys!(bad, name, v)
+    end
+end
+# An array of Dicts is a MATLAB struct array, whose field names come from the keys. They must be
+# strings too: MAT 0.10 refuses Symbol keys there, so every allowed MAT version behaves the same.
+function _collect_bad_keys!(bad, path, v::AbstractArray)
+    eltype(v) <: Union{Number,AbstractString} && return nothing
+    foreach(x -> _collect_bad_keys!(bad, path, x), v)
+end
+_collect_bad_keys!(bad, path, _) = nothing
 
 # The column f(e) for each emitter, in the float type of the emitters' own column `col` when that
 # is Float32 or Float64 (MATLAB single or double), so Float32 data stay single.

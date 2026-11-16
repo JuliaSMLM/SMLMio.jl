@@ -1,12 +1,15 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.1 (unreleased)
+
+## 0.1.0 (2026-11-16)
 
 - Created from SMLMData 0.7.1's SMITE I/O: `SmiteSMD`, `SmiteSMLD`, `load_smite_2d`,
   `load_smite_3d`, and `save_smite`, with git history kept.
 - Depends on SMLMCore and MAT; requires Julia 1.10 or later (SMLMCore's floor).
 - Weak dependency on SMLMData >= 0.7.2 guards against two copies of each type
-  beside pre-split SMLMData.
+  beside pre-split SMLMData: an environment that holds SMLMData 0.7.1 or earlier cannot add
+  SMLMio.
 
 Fixed relative to SMLMData 0.7.1. The positions, optional-field, empty-result, save-and-load
 and filter-then-save fixes were reproduced on real SMITE results files first; the others were
@@ -37,8 +40,11 @@ found by reading SMITE's code or by review, and each has a test that fails witho
   belonged to other localizations. The loaders list SMITE's per-localization fields (catSMD's
   list) in `metadata["smite_per_localization_fields"]` and record each row's frame and photons;
   `save_smite` writes those fields by each emitter's file row (`id`) when every emitter is still
-  its row, and otherwise (combined localizations such as frame connection's combined output,
-  another file's emitters) drops them with a warning.
+  its row (its frame and photons equal that row's), and otherwise (combined localizations such
+  as frame connection's combined output, changed frames or photons, another file's emitters)
+  drops them with a warning. Emitters from another file whose frame and photons equal a row of
+  this file (constant simulated photons, for example) are not detected and get this file's
+  values.
 - Some older SMITE files hold `PValue`, `ThreshFlag`, `XBoxCorner` or `YBoxCorner` with one value
   per dataset. Saved with as many localizations as values, `save_smite` wrote them where a load
   (and SMITE) took them for one value per localization; such a field is now dropped with a
@@ -55,3 +61,26 @@ found by reading SMITE's code or by review, and each has a test that fails witho
   `ArgumentError` naming it.
 - `load_smite_2d` on a 3D file now warns that it leaves out `Z`; a camera whose first edge is
   not at 0 now warns on save, since SMITE has no origin.
+- `save_smite` threw from inside MAT for a metadata key that is not a MATLAB name or a Dict value
+  with non-string keys, after MAT had truncated the target, so saving over an existing file
+  destroyed it. It now checks every key (every nested Dict's and struct array's too) first and
+  throws one `ArgumentError` naming all offending keys. The file is written in full to a
+  temporary file before the target is touched and then copied into place, so a save that fails
+  while writing leaves an existing file as it was (it keeps its owner, permissions and links);
+  only an error during the final copy, such as a full disk, can leave it partly written, and the
+  error then says the file is incomplete and to save again. A
+  missing folder, a folder at the target, a symlink to nothing, a name that is no file, an
+  existing file that may not be written and too little free space to rewrite one are
+  `ArgumentError`s before anything is written.
+- A `FrameNum`, `DatasetNum` or `ConnectID` that is not a whole number threw `InexactError`; it
+  is now an `ArgumentError` naming the field (`DatasetNum` and `ConnectID` are checked on the
+  loaded rows only). So are `XSize`, `YSize`, `NFrames`, `NDatasets` and `ZSize`. An SMD whose
+  `NFrames` or `NDatasets` holds a list of values was reported as having none; the error now says
+  how many values the file holds.
+- `SmiteSMD` and `save_smite` take any string type for paths (a `SubString`, for example), not
+  only `String`. `SmiteSMD` shows its whole folder path, so its compact form reads as the
+  constructor call that rebuilds it.
+- Documentation: `n_frames` is frames per dataset; `save_smite` needs fit emitters
+  (`Emitter2DFit` or `Emitter3DFit`); `σ_xz` and `σ_yz` are not saved either; the file holds an
+  `SMD` in SMITE's layout, which the loaders read, and no `SMF`, so SMITE tools that also load
+  `SMF` need one from the original results file.
