@@ -616,5 +616,22 @@ end
         @test !occursin("no NFrames or NDatasets", err.msg)
         s = smite_smd(3); s["NDatasets"] = reshape([2.0, 2.0], 1, 2)
         @test_throws r"NDatasets holds 2 values" load_smite_2d(write_smd(dir, "perds2.mat", s))
+
+        # Sizes and counts that are not whole numbers: an ArgumentError naming the field
+        for (key, v) in (("XSize", 64.5), ("YSize", NaN), ("NFrames", 99.5), ("NDatasets", 1.5))
+            s = smite_smd(3); s[key] = v
+            @test_throws Regex("$key must be a whole number") load_smite_2d(write_smd(dir, "size_$key.mat", s))
+        end
+        s = smite_smd_3d(3); s["ZSize"] = 7.5
+        @test_throws r"ZSize must be a whole number" load_smite_3d(write_smd(dir, "size_ZSize.mat", s))
+
+        # DatasetNum and ConnectID are checked on the loaded rows only: a row dropped by the
+        # complex screening may hold anything, as before
+        s = smite_smd(3)
+        s["X"] = col(ComplexF32[10, 20 + 1im, 30])
+        s["DatasetNum"] = col([1.0, 1.5, 1.0]); s["ConnectID"] = col([0.0, NaN, 2.0])
+        smld = quiet(() -> load_smite_2d(write_smd(dir, "dropped.mat", s)))
+        @test [e.id for e in smld.emitters] == [1, 3]
+        @test [e.track_id for e in smld.emitters] == [0, 2]
     end
 end

@@ -106,24 +106,19 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     (xsize === nothing || ysize === nothing) && throw(ArgumentError(
         "$where has no image size (XSize, YSize absent or empty; $n localizations), so its camera " *
         "cannot be built"))
-    # SMITE's catSMD joins NFrames into one value per dataset when the datasets differ in length
+    # SMITE's catSMD joins NFrames into a list when the joined datasets differ in length
     for key in ("NFrames", "NDatasets")
         k = _smite_length(get(s, key, nothing))
-        k > 1 && throw(ArgumentError("$where: $key holds $k values (one per dataset, when the " *
-            "datasets differ in length); SMLMio loads files with one $key"))
+        k > 1 && throw(ArgumentError("$where: $key holds $k values; SMLMio loads files with one " *
+            "$key (SMITE's catSMD stores a list of NFrames when the datasets it joins differ in length)"))
     end
     nframes = _smite_scalar(s, "NFrames")
     ndatasets = _smite_scalar(s, "NDatasets")
     (nframes === nothing || ndatasets === nothing) && throw(ArgumentError(
         "$where has no NFrames or NDatasets"))
-    camera = IdealCamera(1:Int(xsize), 1:Int(ysize), px)
-
-    # Frames, datasets and track ids become Int: each value must be a whole number
-    for key in ("FrameNum", "DatasetNum", "ConnectID")
-        bad = findfirst(x -> !(iszero(imag(x)) && isinteger(real(x))), cols[key])
-        bad === nothing || throw(ArgumentError(
-            "$where: $key must hold whole numbers, but row $bad is $(cols[key][bad])"))
-    end
+    xsize, ysize = _smite_int(where, "XSize", xsize), _smite_int(where, "YSize", ysize)
+    nframes, ndatasets = _smite_int(where, "NFrames", nframes), _smite_int(where, "NDatasets", ndatasets)
+    camera = IdealCamera(1:xsize, 1:ysize, px)
 
     # Screen complex values in the per-localization columns read from the file
     fields_to_check = filter(k -> !(k in defaulted),
@@ -137,6 +132,14 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
         @warn "Found $(removed_count) emitters with non-zero imaginary components. These will be excluded from the result." fields_with_complex=collect(keys(complex_indices))
     else
         valid_indices = 1:n
+    end
+
+    # Frames, datasets and track ids become Int: each value must be a whole number. FrameNum is
+    # kept for every file row (the row record save_smite checks), the others for the loaded rows.
+    for (key, rows) in (("FrameNum", 1:n), ("DatasetNum", valid_indices), ("ConnectID", valid_indices))
+        bad = findfirst(i -> !_is_whole(cols[key][i]), rows)
+        bad === nothing || throw(ArgumentError(
+            "$where: $key must hold whole numbers, but row $(rows[bad]) is $(cols[key][rows[bad]])"))
     end
 
     # SMITE stores X, Y and their standard errors in pixels, with (1, 1) the center of the top-left
@@ -160,9 +163,9 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     end
 
     # Metadata
-    data_size = [Int(ysize), Int(xsize)]
+    data_size = [ysize, xsize]
     zsize = _smite_scalar(s, "ZSize")   # SMITE's SMD has no ZSize; kept when a file has one
-    three_d && zsize !== nothing && push!(data_size, Int(zsize))
+    three_d && zsize !== nothing && push!(data_size, _smite_int(where, "ZSize", zsize))
     # Every other SMITE field, and the raw value of an optional field loaded as its default
     used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"],
                     three_d ? ["ZSize"] : String[]))
@@ -187,7 +190,15 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
         metadata["removed_emitter_count"] = n - length(valid_indices)
     end
 
-    SmiteSMLD{Float64,E}(emitters, camera, Int(nframes), Int(ndatasets), metadata)
+    SmiteSMLD{Float64,E}(emitters, camera, nframes, ndatasets, metadata)
+end
+
+# SMITE stores counts and indices as doubles; one becomes an Int only when it is a whole number.
+_is_whole(x) = iszero(imag(x)) && isinteger(real(x))
+
+function _smite_int(where, key, v)
+    _is_whole(v) || throw(ArgumentError("$where: $key must be a whole number, but is $v"))
+    return Int(real(v))
 end
 
 """
