@@ -8,11 +8,11 @@ data. It provides SMITE `.mat` file I/O using SMLMCore's emitters and cameras.
 
 ## Installation
 
-SMLMio is not registered yet. Install it from GitHub:
+Install SMLMio from Julia's General registry:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaSMLM/SMLMio.jl")
+Pkg.add("SMLMio")
 Pkg.add("SMLMCore")   # the examples build data with SMLMCore's types
 ```
 
