@@ -27,6 +27,9 @@ Which fields are written, which are dropped and what a load gives back are on th
   before anything is written. The file is written to a temporary file in `filepath` and replaces
   the target only on success, so a failed save leaves an existing file as it was.
 
+- `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
+  load as 0.
+
 # Example
 ```jldoctest
 julia> using SMLMCore: IdealCamera, Emitter2DFit, BasicSMLD
