@@ -357,3 +357,26 @@ end
         end
     end
 end
+
+@testset "paths of any string type; SmiteSMD shows its whole path" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    e = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    smld = SmiteSMLD{Float64,Emitter2DFit{Float64}}([e], cam, 1, 1, Dict{String,Any}())
+    mktempdir() do dir
+        sub(s) = SubString(string("xx", s, "yy"), 3, 2 + length(s))
+        save_smite(smld, sub(dir), sub("sub.mat"))
+        @test isfile(joinpath(dir, "sub.mat"))
+        smd = SmiteSMD(sub(dir), sub("sub.mat"))
+        @test smd isa SmiteSMD && smd.filepath isa String && smd.filename isa String
+        @test SmiteSMD(sub(dir), sub("sub.mat"), sub("SMD")).varname == "SMD"
+        @test load_smite_2d(smd).emitters[1].x ≈ 1.0
+        # Mutable as before
+        smd.filename = sub("other.mat")
+        @test smd.filename == "other.mat" && smd.filename isa String
+    end
+
+    smd = SmiteSMD("/a/b/c", "x.mat")
+    @test repr(smd) == "SmiteSMD(\"/a/b/c\", \"x.mat\", \"SMD\")"
+    @test repr(eval(Meta.parse(repr(smd)))) == repr(smd)   # it reads as the constructor call it is
+    @test occursin("/a/b/c", sprint(show, MIME("text/plain"), smd))
+end

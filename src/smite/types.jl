@@ -23,12 +23,14 @@ mutable struct SmiteSMD
     varname::String
 end
 
-# Convenience constructor with default variable name
-SmiteSMD(filepath::String, filename::String) = SmiteSMD(filepath, filename, "SMD")
+# Any string type for the paths, and the default variable name
+SmiteSMD(filepath::AbstractString, filename::AbstractString, varname::AbstractString) =
+    SmiteSMD(String(filepath), String(filename), String(varname))
+SmiteSMD(filepath::AbstractString, filename::AbstractString) = SmiteSMD(filepath, filename, "SMD")
 
-# Show methods for SmiteSMD
+# Show methods for SmiteSMD: the constructor call that rebuilds it
 function Base.show(io::IO, smd::SmiteSMD)
-    print(io, "SmiteSMD(\"$(basename(smd.filepath))\", \"$(smd.filename)\", \"$(smd.varname)\")")
+    print(io, "SmiteSMD(", repr(smd.filepath), ", ", repr(smd.filename), ", ", repr(smd.varname), ")")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", smd::SmiteSMD)

@@ -62,7 +62,7 @@ Not saved: `σ_xy` (SMITE has no such field; it loads back as 0) and the emitter
 loads back as the row in the new file. A type whose `propertynames` lists a property that
 `getproperty` refuses breaks Julia's property interface and is not supported.
 """
-function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
+function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::AbstractString)
     # Create SMD structure
     s = Dict{String,Any}()
 
@@ -204,8 +204,8 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     # MAT truncates the target before it checks a struct's keys. Check them all first, and write
     # to a temporary file in the target's folder that replaces the target only on success.
     _check_mat_keys(s)
-    target = joinpath(filepath, filename)
-    tmp = joinpath(filepath, string(".", filename, ".", getpid(), ".", time_ns(), ".tmp"))
+    target = joinpath(String(filepath), String(filename))
+    tmp = joinpath(String(filepath), string(".", filename, ".", getpid(), ".", time_ns(), ".tmp"))
     try
         matwrite(tmp, Dict("SMD" => s))
         mv(tmp, target; force=true)
