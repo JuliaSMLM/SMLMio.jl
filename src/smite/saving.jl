@@ -227,10 +227,14 @@ function _write_smd(target::String, s; copy=_copy_into)
         end
         try
             copy(tmp, target)
-        catch
+        catch e
             # A new file that could not be finished is removed
-            existed || try rm(target; force=true) catch end
-            rethrow()
+            existed || (try rm(target; force=true) catch end; rethrow())
+            e isa InterruptException && rethrow()
+            # An existing file was truncated: say so, and that the data can be saved again
+            error("save_smite: writing $(repr(target)) failed partway, so that file is now " *
+                  "incomplete and its old contents are gone. The data are unchanged in memory: " *
+                  "save again once the cause is fixed. The error was: $(sprint(showerror, e))")
         end
     finally
         rm(tmp; force=true)
@@ -281,21 +285,19 @@ function _check_mat_keys(s)
         join(bad, ", ")))
 end
 
-function _collect_bad_keys!(bad, path, d::AbstractDict; symbols::Bool=false)
+function _collect_bad_keys!(bad, path, d::AbstractDict)
     for (k, v) in d
-        ok = symbols && k isa Symbol ? _is_mat_name(string(k)) : _is_mat_name(k)
-        ok || push!(bad, isempty(path) ? "metadata key $(repr(k))" : "key $(repr(k)) of the Dict $(path)")
+        _is_mat_name(k) || push!(bad, isempty(path) ? "metadata key $(repr(k))" :
+                                      "key $(repr(k)) of the Dict $(path)")
         name = isempty(path) ? string(k) : string(path, ".", k)
         _collect_bad_keys!(bad, name, v)
     end
 end
-# An array of Dicts is a MATLAB struct array, whose field names come from the keys; MAT also
-# takes Symbol keys there.
+# An array of Dicts is a MATLAB struct array, whose field names come from the keys. They must be
+# strings too: MAT 0.10 refuses Symbol keys there, so every allowed MAT version behaves the same.
 function _collect_bad_keys!(bad, path, v::AbstractArray)
     eltype(v) <: Union{Number,AbstractString} && return nothing
-    for x in v
-        x isa AbstractDict ? _collect_bad_keys!(bad, path, x; symbols=true) : _collect_bad_keys!(bad, path, x)
-    end
+    foreach(x -> _collect_bad_keys!(bad, path, x), v)
 end
 _collect_bad_keys!(bad, path, _) = nothing
 

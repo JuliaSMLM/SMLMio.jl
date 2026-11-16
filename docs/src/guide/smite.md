@@ -95,7 +95,8 @@ A missing folder, a folder (or anything but a file) of the file's name, a symlin
 name that is no file, an existing file you may not write, too little free space to rewrite one
 (where the system reports it), a camera whose pixels
 are not uniform and square, and metadata keys that are not MATLAB names (an ASCII letter, then up
-to 62 letters, digits or underscores; Dict values need such string keys) are each an
+to 62 letters, digits or underscores; Dict values and arrays of Dicts need such string keys) are
+each an
 `ArgumentError` naming what is wrong, and nothing is written.
 
 The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the loaders read. It
@@ -107,7 +108,8 @@ refusing a value, the file held open by HDF5 in the same session) leaves an exis
 was and creates none. An existing file keeps its owner, permissions and links, as with a direct
 write (for a symlink, the file it points to is rewritten). An error during the final copy (a full
 disk, a lost network share, an interruption) can leave the file partly written, as with a direct
-write. It contains:
+write; the error then says the file is incomplete. The data are unchanged in memory, so save
+again once the cause is fixed. It contains:
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels. Columns of `Float32` stay MATLAB single.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter

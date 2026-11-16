@@ -65,7 +65,8 @@ found by reading SMITE's code or by review, and each has a test that fails witho
   throws one `ArgumentError` naming all offending keys. The file is written in full to a
   temporary file before the target is touched and then copied into place, so a save that fails
   while writing leaves an existing file as it was (it keeps its owner, permissions and links);
-  only an error during the final copy, such as a full disk, can leave it partly written. A
+  only an error during the final copy, such as a full disk, can leave it partly written, and the
+  error then says the file is incomplete and to save again. A
   missing folder, a folder at the target, a symlink to nothing, a name that is no file, an
   existing file that may not be written and too little free space to rewrite one are
   `ArgumentError`s before anything is written.

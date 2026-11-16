@@ -356,15 +356,16 @@ end
             @test readdir(dir) == ["r.mat"]
         end
 
-        @testset "a key with a trailing newline; an array of Dicts saves as before" begin
+        @testset "a key with a trailing newline; arrays of Dicts" begin
             now = read(joinpath(dir, "r.mat"))
             @test_throws r"a\\n" save_smite(mk(Dict{String,Any}("a\n" => 1.0)), dir, "r.mat")
             @test read(joinpath(dir, "r.mat")) == now
-            # MAT writes an array of Dicts as a struct array, Symbol keys included; its field
-            # names must be MATLAB names too
+            # MAT writes an array of Dicts as a struct array: its keys must be MATLAB names and
+            # strings (MAT 0.10 refuses Symbol keys there; newer MAT takes them)
             @test_throws r"bad key" save_smite(mk(Dict{String,Any}("arr" => [Dict("bad key" => 1.0)])), dir, "r.mat")
+            @test_throws r":a" save_smite(mk(Dict{String,Any}("arr" => [Dict(:a => 1.0)])), dir, "r.mat")
             @test read(joinpath(dir, "r.mat")) == now
-            save_smite(mk(Dict{String,Any}("arr" => [Dict(:a => 1.0), Dict(:a => 2.0)])), dir, "r.mat")
+            save_smite(mk(Dict{String,Any}("arr" => [Dict("a" => 1.0), Dict("a" => 2.0)])), dir, "r.mat")
             @test haskey(matread(joinpath(dir, "r.mat"))["SMD"], "arr")
             @test readdir(dir) == ["r.mat"]
         end
@@ -378,8 +379,9 @@ end
         end
 
         @testset "a file held open by HDF5 is refused and left as it was" begin
+            # A read-only handle: closing a read-write one updates the file's HDF5 header itself
             now = read(joinpath(dir, "r.mat"))
-            io = matopen(joinpath(dir, "r.mat"), "r+")
+            io = matopen(joinpath(dir, "r.mat"), "r")
             try
                 @test_throws Exception save_smite(good, dir, "r.mat")
             finally
@@ -402,8 +404,12 @@ end
             @test_throws r"disk full" SMLMio._write_smd(joinpath(dir, "new2.mat"), s; copy=failing)
             @test !ispath(joinpath(dir, "new2.mat"))
             @test isempty(ours())
-            # An existing file is then partly written, as documented; the temporary file goes
-            @test_throws r"disk full" SMLMio._write_smd(joinpath(dir, "r.mat"), s; copy=failing)
+            # An existing file is then partly written, as documented, and the error says so; the
+            # temporary file goes
+            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; copy=failing); nothing catch ex; ex end
+            @test err isa ErrorException
+            @test occursin("incomplete", err.msg) && occursin("save again", err.msg) &&
+                  occursin("disk full", err.msg)
             @test read(joinpath(dir, "r.mat"), String) == "partial"
             @test isempty(ours())
         end
