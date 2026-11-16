@@ -98,7 +98,12 @@ holds no `SMF`, so SMITE tools that also load an `SMF` need one from the origina
 It is written to a temporary file in the folder that replaces the target only when the write
 succeeds, so a failed save leaves an existing file as it was. It contains:
 
-- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Z`, `Z_SE` in µm for 3D data
+- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels. Columns of `Float32` stay MATLAB single.
+- `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
+  has properties `z` and `σ_z` and whose `z` and `σ_z` columns are each all `Float32` or all
+  `Float64` (MAT cannot write other types, and writes a mixed column as a cell). Other non-empty
+  3D or mixed 2D/3D data save without `Z`, with a warning: an SMD has one `Z` column for all
+  localizations, so save 2D and 3D data separately to keep it.
 - `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
   and indices as doubles, as most SMITE results files hold them. SMITE has one pixel size, so a
   camera whose pixels are not uniform and square is an error.
