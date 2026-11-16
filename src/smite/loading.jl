@@ -227,8 +227,9 @@ loaders treat empty and per-dataset fields, and what is kept in the metadata, is
 - Throws an `ArgumentError` when the file has no pixel size and none is passed, no image size
   (`XSize`, `YSize`; SMITE leaves them empty in a result without localizations), no `NFrames` or
   `NDatasets` or several of them, or a required field (`X`, `Y`, `Photons`, `Bg`, `X_SE`,
-  `Y_SE`, `FrameNum`) without one value per localization; and when `FrameNum`, `DatasetNum` or
-  `ConnectID` holds a value that is not a whole number.
+  `Y_SE`, `FrameNum`) without one value per localization; and when `XSize`, `YSize`, `NFrames`
+  or `NDatasets` is not a whole number, or `FrameNum`, `DatasetNum` or `ConnectID` holds a value
+  that is not (`DatasetNum` and `ConnectID` in the loaded rows).
 - Emitters with non-zero imaginary components are excluded with a warning.
 
 # Example

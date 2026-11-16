@@ -356,10 +356,18 @@ end
             @test readdir(dir) == ["r.mat"]
         end
 
-        @testset "a key with a trailing newline, and keys inside an array of Dicts" begin
+        @testset "a key with a trailing newline; an array of Dicts saves as before" begin
+            now = read(joinpath(dir, "r.mat"))
             @test_throws r"a\\n" save_smite(mk(Dict{String,Any}("a\n" => 1.0)), dir, "r.mat")
-            arr = [Dict("ok" => 1.0), Dict("bad key" => 2.0)]
-            @test_throws r"bad key" save_smite(mk(Dict{String,Any}("arr" => arr)), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == now
+            # MAT writes an array of Dicts as a struct array, Symbol keys included
+            save_smite(mk(Dict{String,Any}("arr" => [Dict(:a => 1.0), Dict(:a => 2.0)])), dir, "r.mat")
+            @test haskey(matread(joinpath(dir, "r.mat"))["SMD"], "arr")
+            @test readdir(dir) == ["r.mat"]
+        end
+
+        @testset "a new file whose write fails is not left behind" begin
+            @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "new.mat")
             @test readdir(dir) == ["r.mat"]
         end
     end
@@ -380,9 +388,12 @@ end
         @test read(joinpath(dir, "Cell_01", "keep.txt"), String) == "keep"
         @test readdir(dir) == ["Cell_01"]
 
-        # A missing folder is named, not a hidden temporary file
+        # A missing folder, or a folder argument that is a file, is named
         err = try save_smite(mk(1.0), joinpath(dir, "missing"), "r.mat"); nothing catch ex; ex end
-        @test err isa ArgumentError && occursin("missing", err.msg) && !occursin(".tmp", err.msg)
+        @test err isa ArgumentError && occursin("missing", err.msg) && occursin("does not exist", err.msg)
+        write(joinpath(dir, "afile"), "x")
+        @test_throws r"is not a folder" save_smite(mk(1.0), joinpath(dir, "afile"), "r.mat")
+        rm(joinpath(dir, "afile"))
 
         # A file name with a folder in it, and an absolute file name, save as before
         save_smite(mk(2.0), dir, joinpath("Cell_01", "r.mat"))
@@ -390,26 +401,37 @@ end
         save_smite(mk(3.0), dir, joinpath(dir, "abs.mat"))
         @test xof(dir, "abs.mat") ≈ 3.0
 
-        # An existing file keeps its permissions; a read-only one is refused and unchanged
-        f = joinpath(dir, "mode.mat")
-        save_smite(mk(1.0), dir, "mode.mat"); chmod(f, 0o640)
-        save_smite(mk(4.0), dir, "mode.mat")
-        @test filemode(f) & 0o777 == 0o640 && xof(dir, "mode.mat") ≈ 4.0
-        chmod(f, 0o440)
-        @test_throws r"read-only" save_smite(mk(5.0), dir, "mode.mat")
-        @test xof(dir, "mode.mat") ≈ 4.0
-        chmod(f, 0o640)
-
-        # A symlink is followed: the linked file is replaced and the link stays a link
+        # An existing file is rewritten in place, as a direct write would: it keeps its
+        # permissions and its hard links, and a file the system will not let us write is refused
+        # and unchanged (POSIX permissions; CI runs on Linux)
         if !Sys.iswindows()
+            f = joinpath(dir, "mode.mat")
+            save_smite(mk(1.0), dir, "mode.mat"); chmod(f, 0o640)
+            hardlink(f, joinpath(dir, "hard.mat"))
+            save_smite(mk(4.0), dir, "mode.mat")
+            @test filemode(f) & 0o777 == 0o640 && xof(dir, "mode.mat") ≈ 4.0
+            @test xof(dir, "hard.mat") ≈ 4.0   # the same file, not a replaced one
+            chmod(f, 0o440)
+            if Libc.geteuid() != 0   # root may write any file
+                @test_throws r"cannot be written" save_smite(mk(5.0), dir, "mode.mat")
+                @test xof(dir, "mode.mat") ≈ 4.0
+            end
+            chmod(f, 0o640)
+
+            # A symlink is followed: the linked file is rewritten and the link stays a link; a
+            # symlink to a folder is a folder
             save_smite(mk(1.0), dir, "real.mat")
             symlink(joinpath(dir, "real.mat"), joinpath(dir, "link.mat"))
             save_smite(mk(6.0), dir, "link.mat")
             @test islink(joinpath(dir, "link.mat"))
             @test xof(dir, "real.mat") ≈ 6.0
+            symlink(joinpath(dir, "Cell_01"), joinpath(dir, "dirlink"))
+            @test_throws r"is a folder" save_smite(mk(1.0), dir, "dirlink")
+            @test read(joinpath(dir, "Cell_01", "keep.txt"), String) == "keep"
         end
-        # No temporary file is left behind
-        @test !any(startswith(".smlmio-"), readdir(dir))
+        # Nothing else is left in the folder
+        @test issubset(readdir(dir), ["Cell_01", "abs.mat", "mode.mat", "hard.mat", "real.mat",
+                                      "link.mat", "dirlink"])
     end
 end
 

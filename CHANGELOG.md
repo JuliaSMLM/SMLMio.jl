@@ -62,11 +62,11 @@ found by reading SMITE's code or by review, and each has a test that fails witho
 - `save_smite` threw from inside MAT for a metadata key that is not a MATLAB name or a Dict value
   with non-string keys, after MAT had truncated the target, so saving over an existing file
   destroyed it. It now checks every key (and every nested Dict's keys) first and throws one
-  `ArgumentError` naming all offending keys, and writes to a temporary file in the target's
-  folder that is renamed over the target only on success, so a failed save never destroys a
-  file. A target that is a folder, a name that is no file, a missing folder and a read-only file
-  are `ArgumentError`s before anything is written; a replaced file keeps its permissions, and a
-  symlink's target file is replaced.
+  `ArgumentError` naming all offending keys. An existing file is written in full to a temporary
+  file first and only then copied into the file in place, so a failed save leaves it as it was
+  and it keeps its owner, permissions and links; a new file whose write fails is removed. A
+  missing folder, a folder at the target, a name that is no file and a file that may not be
+  written are `ArgumentError`s before anything is written.
 - A `FrameNum`, `DatasetNum` or `ConnectID` that is not a whole number threw `InexactError`; it
   is now an `ArgumentError` naming the field (`DatasetNum` and `ConnectID` are checked on the
   loaded rows only). So are `XSize`, `YSize`, `NFrames`, `NDatasets` and `ZSize`. An SMD whose
