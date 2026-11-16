@@ -6,33 +6,25 @@ data. It provides SMITE `.mat` file I/O using SMLMCore's emitters and cameras.
 [![CI](https://github.com/JuliaSMLM/SMLMio.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMio.jl/actions/workflows/CI.yml)
 [![Docs: stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaSMLM.github.io/SMLMio.jl/stable)
 
-SMLMio 0.1 holds SMLMData 0.7.1's SMITE I/O with its bugs fixed: positions convert between
-SMITE's pixels and microns, the loaders read files whose optional fields are empty or one per
-dataset, and files written by `save_smite` load back. See the [CHANGELOG](CHANGELOG.md).
-
 ## Installation
 
-SMLMio is not registered yet. Install it from GitHub; its dependency SMLMCore comes from the
-General registry:
+SMLMio is not registered yet. Install it from GitHub:
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/JuliaSMLM/SMLMio.jl")
+Pkg.add("SMLMCore")   # the examples build data with SMLMCore's types
 ```
+
+An environment that holds SMLMData 0.7.1 or earlier, directly or through a package that depends
+on it (GaussMLE, SMLMSim, SMLMBoxer, SMLMAnalysis and others), cannot add SMLMio. Those versions
+define the same types and their own SMITE loaders, and Pkg reports unsatisfiable requirements for
+SMLMData. Until SMLMData 0.7.2 is released, use SMLMio in an environment without them.
 
 ## Quick start
 
-Load a SMITE results file. Positions and their uncertainties come out in microns; SMITE stores
-them in pixels.
-
-```julia
-using SMLMio
-
-smld = load_smite_2d(SmiteSMD("path/to/Results/ResultsStructs", "Cell_01_Label_01_Results.mat"))
-smld.emitters[1].x            # microns from the camera's corner
-```
-
-Save a small dataset as a SMITE file and load it back:
+Save a small dataset as a SMITE file and load it back. Positions and their uncertainties are in
+microns; the file holds them in SMITE's pixels.
 
 ```julia
 using SMLMio
@@ -45,14 +37,17 @@ mktempdir() do dir
     save_smite(smld, dir, "localizations.mat")
     loaded = load_smite_2d(SmiteSMD(dir, "localizations.mat"))
     e = loaded.emitters[1]
-    println((e.x, e.y))   # (1.0, 2.0): microns, as saved
+    println((e.x, e.y))   # microns, as saved
 end
 ```
 
 ## Where it fits
 
-SMLMio takes and returns SMLMCore's types. SMLMData loads and re-exports SMLMCore and SMLMio,
-so existing `using SMLMData` code is unchanged by the split (SMLMData 0.7.2 and later).
+SMLMio takes and returns SMLMCore's types ([SMLMCore](https://JuliaSMLM.github.io/SMLMCore.jl/stable)).
+From SMLMData 0.7.2 (not yet released), SMLMData loads and re-exports SMLMCore and SMLMio, so
+`using SMLMData` code keeps working. Its SMITE results change as the
+[CHANGELOG](https://github.com/JuliaSMLM/SMLMio.jl/blob/main/CHANGELOG.md) lists: positions are
+in microns, and a file without `PixelSize` needs `pixel_size`.
 
 ## Documentation
 

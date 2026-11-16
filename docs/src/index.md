@@ -1,25 +1,33 @@
 # SMLMio.jl
 
 SMLMio reads and writes the lab's file formats for single-molecule localization microscopy (SMLM)
-data. It provides SMITE `.mat` file I/O. It was split from SMLMData 0.7.1.
+data. It provides SMITE `.mat` file I/O.
 
 !!! info "Units"
     Positions and their uncertainties are in microns, as in SMLMCore.
 
 ## Where it fits
 
-SMLMio takes and returns SMLMCore's types. SMLMData loads and re-exports SMLMCore and SMLMio,
-so existing `using SMLMData` code is unchanged by the split (SMLMData 0.7.2 and later).
+SMLMio takes and returns SMLMCore's types ([SMLMCore](https://JuliaSMLM.github.io/SMLMCore.jl/stable)).
+From SMLMData 0.7.2 (not yet released), SMLMData loads and re-exports SMLMCore and SMLMio, so
+`using SMLMData` code keeps working. Its SMITE results change as the
+[CHANGELOG](https://github.com/JuliaSMLM/SMLMio.jl/blob/main/CHANGELOG.md) lists: positions are
+in microns, and a file without `PixelSize` needs `pixel_size`.
 
 ## Installation
 
-SMLMio is not registered yet. Install it from GitHub; its dependency SMLMCore comes from the
-General registry:
+SMLMio is not registered yet. Install it from GitHub:
 
 ```julia
 using Pkg
 Pkg.add(url="https://github.com/JuliaSMLM/SMLMio.jl")
+Pkg.add("SMLMCore")   # the examples build data with SMLMCore's types
 ```
+
+An environment that holds SMLMData 0.7.1 or earlier, directly or through a package that depends
+on it (GaussMLE, SMLMSim, SMLMBoxer, SMLMAnalysis and others), cannot add SMLMio. Those versions
+define the same types and their own SMITE loaders, and Pkg reports unsatisfiable requirements for
+SMLMData. Until SMLMData 0.7.2 is released, use SMLMio in an environment without them.
 
 ## Quick start
 
