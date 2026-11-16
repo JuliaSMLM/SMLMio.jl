@@ -201,9 +201,43 @@ function save_smite(smld::AbstractSMLD, filepath::String, filename::String)
     zcols === nothing && !isempty(smld.emitters) && haskey(s, "Z") &&
         _smite_length(s["Z"]) == length(smld.emitters) && (s["NDims"] = 3.0)
     
-    # Save to file
-    matwrite(joinpath(filepath, filename), Dict("SMD" => s))
+    # MAT truncates the target before it checks a struct's keys. Check them all first, and write
+    # to a temporary file in the target's folder that replaces the target only on success.
+    _check_mat_keys(s)
+    target = joinpath(filepath, filename)
+    tmp = joinpath(filepath, string(".", filename, ".", getpid(), ".", time_ns(), ".tmp"))
+    try
+        matwrite(tmp, Dict("SMD" => s))
+        mv(tmp, target; force=true)
+    catch
+        rm(tmp; force=true)
+        rethrow()
+    end
+    return nothing
 end
+
+# MATLAB's names: an ASCII letter, then up to 62 letters, digits or underscores.
+_is_mat_name(k) = k isa AbstractString && occursin(r"^[A-Za-z][A-Za-z0-9_]{0,62}$", k)
+
+# Throws one ArgumentError naming every key MAT would refuse: a struct key that is not a MATLAB
+# name, or a key of a Dict value that is not a string. `path` names the Dict inside the SMD.
+function _check_mat_keys(s)
+    bad = String[]
+    _collect_bad_keys!(bad, "", s)
+    isempty(bad) || throw(ArgumentError("save_smite: MATLAB cannot store these keys; a key must be " *
+        "a string of an ASCII letter, then up to 62 letters, digits or underscores: " *
+        join(bad, ", ")))
+end
+
+function _collect_bad_keys!(bad, path, d::AbstractDict)
+    for (k, v) in d
+        _is_mat_name(k) || push!(bad, isempty(path) ? "metadata key $(repr(k))" :
+                                      "key $(repr(k)) of the Dict $(path)")
+        name = isempty(path) ? string(k) : string(path, ".", k)
+        v isa AbstractDict && _collect_bad_keys!(bad, name, v)
+    end
+end
+_collect_bad_keys!(bad, path, _) = nothing
 
 # The column f(e) for each emitter, in the float type of the emitters' own column `col` when that
 # is Float32 or Float64 (MATLAB single or double), so Float32 data stay single.

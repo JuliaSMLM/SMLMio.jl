@@ -300,3 +300,60 @@ end
         end
     end
 end
+
+@testset "save_smite checks keys first and never destroys a file" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    e = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    mk(md) = SmiteSMLD{Float64,Emitter2DFit{Float64}}([e], cam, 1, 1, md)
+    good = mk(Dict{String,Any}("analysis_date" => "today"))
+    mktempdir() do dir
+        save_smite(good, dir, "r.mat")
+        before = read(joinpath(dir, "r.mat"))
+
+        @testset "invalid keys are named, one error, file untouched" begin
+            md = Dict{String,Any}("analysis date" => 1.0, "γ" => 2.0, "1st_pass" => 3.0,
+                                  "a" ^ 64 => 4.0, "drift-model" => 5.0, "fine_key" => 6.0,
+                                  "monomer_D" => Dict(1 => 0.1, 2 => 0.2),
+                                  "nested" => Dict("ok" => 1.0, "bad key" => 2.0))
+            err = try save_smite(mk(md), dir, "r.mat"); nothing catch ex; ex end
+            @test err isa ArgumentError
+            msg = err.msg
+            for k in ("analysis date", "γ", "1st_pass", "a" ^ 64, "drift-model", "monomer_D", "bad key")
+                @test occursin(k, msg)
+            end
+            @test occursin("key 1 of the Dict monomer_D", msg)
+            @test occursin("key 2 of the Dict monomer_D", msg)
+            @test !occursin("fine_key", msg)
+            @test read(joinpath(dir, "r.mat")) == before
+            @test readdir(dir) == ["r.mat"]
+            # No file is created either when there was none
+            @test_throws ArgumentError save_smite(mk(md), dir, "new.mat")
+            @test !isfile(joinpath(dir, "new.mat"))
+            @test readdir(dir) == ["r.mat"]
+        end
+
+        @testset "a Dict with Symbol keys is named too" begin
+            @test_throws r"sym" save_smite(mk(Dict{String,Any}("sym" => Dict(:a => 1.0))), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == before
+        end
+
+        @testset "a write that fails midway leaves the existing file" begin
+            # MAT cannot write Float16: the failure comes from matwrite, after the keys check
+            @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "r.mat")
+            @test read(joinpath(dir, "r.mat")) == before
+            @test readdir(dir) == ["r.mat"]
+        end
+
+        @testset "normal saves are unaffected" begin
+            ok = mk(Dict{String,Any}("analysis_date" => "later", "a" => "a" ^ 100,
+                                     "z" ^ 63 => 1.0, "inner" => Dict("k_1" => 2.0)))
+            @test_logs save_smite(ok, dir, "r.mat")   # overwrites the existing file
+            smd = matread(joinpath(dir, "r.mat"))["SMD"]
+            @test smd["analysis_date"] == "later"
+            @test smd["inner"]["k_1"] == 2.0
+            @test haskey(smd, "z" ^ 63)
+            @test load_smite_2d(SmiteSMD(dir, "r.mat")).emitters[1].x ≈ 1.0
+            @test readdir(dir) == ["r.mat"]
+        end
+    end
+end
