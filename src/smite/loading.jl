@@ -106,11 +106,24 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     (xsize === nothing || ysize === nothing) && throw(ArgumentError(
         "$where has no image size (XSize, YSize absent or empty; $n localizations), so its camera " *
         "cannot be built"))
+    # SMITE's catSMD joins NFrames into one value per dataset when the datasets differ in length
+    for key in ("NFrames", "NDatasets")
+        k = _smite_length(get(s, key, nothing))
+        k > 1 && throw(ArgumentError("$where: $key holds $k values (one per dataset, when the " *
+            "datasets differ in length); SMLMio loads files with one $key"))
+    end
     nframes = _smite_scalar(s, "NFrames")
     ndatasets = _smite_scalar(s, "NDatasets")
     (nframes === nothing || ndatasets === nothing) && throw(ArgumentError(
         "$where has no NFrames or NDatasets"))
     camera = IdealCamera(1:Int(xsize), 1:Int(ysize), px)
+
+    # Frames, datasets and track ids become Int: each value must be a whole number
+    for key in ("FrameNum", "DatasetNum", "ConnectID")
+        bad = findfirst(x -> !(iszero(imag(x)) && isinteger(real(x))), cols[key])
+        bad === nothing || throw(ArgumentError(
+            "$where: $key must hold whole numbers, but row $bad is $(cols[key][bad])"))
+    end
 
     # Screen complex values in the per-localization columns read from the file
     fields_to_check = filter(k -> !(k in defaulted),

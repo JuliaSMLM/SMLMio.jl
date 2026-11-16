@@ -585,3 +585,36 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 end
+
+@testset "loader errors name what is wrong" begin
+    mktempdir() do dir
+        # FrameNum, DatasetNum and ConnectID become Int: an ArgumentError naming the field, not an InexactError
+        for (key, bad, what) in (("FrameNum", [1.0, 2.5, 3.0], "2.5"),
+                                 ("DatasetNum", [1.0, 1.0, NaN], "NaN"),
+                                 ("ConnectID", [0.0, Inf, 2.0], "Inf"),
+                                 ("FrameNum", ComplexF64[1, 2 + 1im, 3], "2.0 + 1.0im"))
+            s = smite_smd(3); s[key] = col(bad)
+            smd = write_smd(dir, "int_$key.mat", s)
+            for load in (load_smite_2d, load_smite_3d)
+                s3 = load === load_smite_3d ? smite_smd_3d(3) : s
+                load === load_smite_3d && (s3[key] = col(bad); smd = write_smd(dir, "int3_$key.mat", s3))
+                err = try load(smd); nothing catch ex; ex end
+                @test err isa ArgumentError
+                @test occursin("$key must hold whole numbers", err.msg)
+                @test occursin(what, err.msg)
+            end
+        end
+        # A complex field with a zero imaginary part is its real part, as in the screening of the other fields
+        s = smite_smd(3); s["FrameNum"] = col(ComplexF64[1, 2, 3])
+        @test [e.frame for e in load_smite_2d(write_smd(dir, "intc.mat", s)).emitters] == [1, 2, 3]
+
+        # NFrames or NDatasets with one value per dataset: the error says what the file holds
+        s = smite_smd(3); s["NFrames"] = col([100.0, 80.0]); s["NDatasets"] = 2.0
+        err = try load_smite_2d(write_smd(dir, "perds.mat", s)); nothing catch ex; ex end
+        @test err isa ArgumentError
+        @test occursin("NFrames holds 2 values", err.msg)
+        @test !occursin("no NFrames or NDatasets", err.msg)
+        s = smite_smd(3); s["NDatasets"] = reshape([2.0, 2.0], 1, 2)
+        @test_throws r"NDatasets holds 2 values" load_smite_2d(write_smd(dir, "perds2.mat", s))
+    end
+end
