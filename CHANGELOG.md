@@ -4,7 +4,7 @@
 
 - Created from SMLMData 0.7.1's SMITE I/O: `SmiteSMD`, `SmiteSMLD`, `load_smite_2d`,
   `load_smite_3d`, and `save_smite`, with git history kept.
-- Depends on SMLMCore and MAT.
+- Depends on SMLMCore and MAT; requires Julia 1.10 or later (SMLMCore's floor).
 - Weak dependency on SMLMData >= 0.7.2 guards against two copies of each type
   beside pre-split SMLMData.
 

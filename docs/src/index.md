@@ -13,11 +13,11 @@ so existing `using SMLMData` code is unchanged by the split (SMLMData 0.7.2 and 
 
 ## Installation
 
-SMLMio and SMLMCore are not registered yet. Install both from GitHub, SMLMCore first:
+SMLMio is not registered yet. Install it from GitHub; its dependency SMLMCore comes from the
+General registry:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaSMLM/SMLMCore.jl")
 Pkg.add(url="https://github.com/JuliaSMLM/SMLMio.jl")
 ```
 

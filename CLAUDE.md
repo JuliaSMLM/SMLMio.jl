@@ -21,7 +21,3 @@ Record all declared test groups and the strict docs build from a clean, pushed c
 ```bash
 julia /home/kalidke/julia_shared_dev/kalidke/admiral/conventions/templates/package/record_tests.jl
 ```
-
-julia = 1.11 is temporary: [sources] (Julia 1.11+) resolves the unregistered SMLMCore. When
-SMLMCore is registered, drop [sources] and lower the floor to 1.9 (SMLMData's floor) with a floor record, before
-SMLMio is registered.

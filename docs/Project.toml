@@ -5,7 +5,6 @@ SMLMCore = "240e48d6-ab50-4b9c-b28c-b5763f96a46b"
 
 [sources]
 SMLMio = {path = ".."}
-SMLMCore = {path = "../../SMLMCore"}
 
 [compat]
 Documenter = "1"

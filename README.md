@@ -12,11 +12,11 @@ dataset, and files written by `save_smite` load back. See the [CHANGELOG](CHANGE
 
 ## Installation
 
-SMLMio and SMLMCore are not registered yet. Install both from GitHub, SMLMCore first:
+SMLMio is not registered yet. Install it from GitHub; its dependency SMLMCore comes from the
+General registry:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/JuliaSMLM/SMLMCore.jl")
 Pkg.add(url="https://github.com/JuliaSMLM/SMLMio.jl")
 ```
 
