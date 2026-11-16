@@ -1,7 +1,7 @@
 name = "SMLMio"
 uuid = "b22eae6f-8030-48c8-88e1-31d49f7b605c"
 authors = ["Keith Lidke <klidke@unm.edu>"]
-version = "0.1.0"
+version = "0.1.1-DEV"
 
 [deps]
 MAT = "23992714-dd62-5051-b70f-ba57cb901cac"
