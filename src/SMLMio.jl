@@ -3,12 +3,14 @@
 
 File reading and writing for single-molecule localization microscopy (SMLM) data.
 
-SMLMio holds the file formats; the data types it reads into and writes from (emitters, cameras,
-`BasicSMLD`) live in SMLMCore. Positions are in microns, as in SMLMCore.
+The emitters and cameras it reads and writes are SMLMCore's. The loaders return SMLMio's
+[`SmiteSMLD`](@ref), an SMLMCore `AbstractSMLD`, and [`save_smite`](@ref) writes any SMLD of fit
+emitters. Positions are in µm, as in SMLMCore.
 
 # Formats
-- SMITE, the lab's MATLAB package: `SmiteSMD` names a `.mat` file, `load_smite_2d` and
-  `load_smite_3d` read it into a `SmiteSMLD`, and `save_smite` writes one back.
+- SMITE, the lab's MATLAB package: [`SmiteSMD`](@ref) names a `.mat` file, [`load_smite_2d`](@ref)
+  and [`load_smite_3d`](@ref) read it into a [`SmiteSMLD`](@ref), and [`save_smite`](@ref) writes
+  one back. See [SMITE files](@ref).
 
 # Example
 ```julia

@@ -1,21 +1,30 @@
 """
-    SmiteSMD
+    SmiteSMD(filepath, filename, varname="SMD")
 
-Helper structure for loading Smite SMD .mat files.
+Name of an SMD variable in a SMITE `.mat` file: folder, file name and variable name.
 
 # Fields
-- `filepath::String`: Path to the directory containing the .mat file
-- `filename::String`: Name of the .mat file
-- `varname::String`: Variable name in the .mat file (default: "SMD")
+- `filepath::String`: folder holding the file.
+- `filename::String`: name of the `.mat` file.
+- `varname::String`: name of the SMD variable in the file.
+
+# Constructors
+- `SmiteSMD(filepath, filename)`: the variable is `"SMD"`, as SMITE names it.
+- `SmiteSMD(filepath, filename, varname)`: a variable of another name.
+
+Each argument can be any `AbstractString`; the fields are `String`s.
 
 # Example
-```julia
-# Load from default "SMD" variable
-smd = SmiteSMD("path/to/data", "localizations.mat")
-
-# Load from custom variable name
-smd = SmiteSMD("path/to/data", "localizations.mat", "CustomSMD")
+```jldoctest
+julia> SmiteSMD("path/to/data", "localizations.mat")
+SmiteSMD:
+  Filepath: "path/to/data"
+  Filename: "localizations.mat"
+  Variable name: "SMD"
 ```
+
+# See also
+[`load_smite_2d`](@ref), [`load_smite_3d`](@ref)
 """
 mutable struct SmiteSMD 
     filepath::String
@@ -43,18 +52,22 @@ end
 """
     SmiteSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
 
-SMLD type compatible with the Smite SMD (Single Molecule Data) format.
+SMLD of the fit emitters of a SMITE SMD; the SMD's other fields are kept in `metadata`.
 
 # Fields
-- `emitters::Vector{E}`: Vector of localized emitters
-- `camera::AbstractCamera`: Camera used for acquisition
-- `n_frames::Int`: Total number of frames in acquisition
-- `n_datasets::Int`: Number of datasets in the acquisition
-- `metadata::Dict{String,Any}`: Additional dataset information
+- `emitters::Vector{E}`: the localizations; positions and uncertainties in µm.
+- `camera::AbstractCamera`: an `IdealCamera` of `XSize` × `YSize` pixels of `PixelSize` µm, built
+  from the file (an sCMOS calibration is not in the file).
+- `n_frames::Int`: frames per dataset (SMITE's `NFrames`); `frame` runs from 1 to `n_frames` in
+  each dataset.
+- `n_datasets::Int`: number of datasets (SMITE's `NDatasets`).
+- `metadata::Dict{String,Any}`: the SMD's other fields and the loaders' entries; see
+  [SMITE files](@ref).
 
-# Type Parameters
-- `T`: Numeric type for coordinates (typically Float64)
-- `E`: Concrete emitter type (typically Emitter2DFit or Emitter3DFit)
+# Constructors
+Returned by [`load_smite_2d`](@ref) and [`load_smite_3d`](@ref), with `T` = `Float64`. To build
+one, give both type parameters: `SmiteSMLD{Float64,E}(emitters, camera, n_frames, n_datasets,
+metadata)`. [`save_smite`](@ref) takes any SMLD, so building one is rarely needed.
 """
 struct SmiteSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
     emitters::Vector{E}
