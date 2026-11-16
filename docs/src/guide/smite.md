@@ -69,8 +69,8 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   names the field.
 - **No localizations.** SMITE leaves `XSize` and `YSize` empty in a result without
   localizations, so no camera can be built and the loader throws, naming the missing image size.
-- **One `NFrames`.** When datasets differ in length SMITE joins `NFrames` (and `NDatasets`) into
-  one value per dataset; the loaders throw, saying how many values the file holds.
+- **One `NFrames`.** When the datasets it joins differ in length, SMITE's `catSMD` stores a list
+  of `NFrames`; the loaders throw, saying how many values the file holds.
 - **3D.** SMITE's SMD has no `ZSize`. When a file has one, `load_smite_3d` appends it to
   `data_size`; `load_smite_2d` keeps it in the metadata. `load_smite_2d` on a file with `NDims`
   3 warns that it leaves `Z` out (kept in the metadata).
@@ -90,8 +90,10 @@ save_smite(smld, "output/directory", "processed_Results.mat")
 `σ_photons`, `σ_bg`, `frame`, `dataset` and `track_id`, as `Emitter2DFit` and `Emitter3DFit` do
 (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and `pixel_edges_y`. It can be
 a [`SmiteSMLD`](@ref), a `BasicSMLD`, or your own type with `emitters`, `camera`, `n_frames`,
-`n_datasets` and `metadata`. `Emitter2D` and `Emitter3D` cannot be saved. The folder must exist,
-and a file of that name is overwritten.
+`n_datasets` and `metadata`. `Emitter2D` and `Emitter3D` cannot be saved. The folder must exist
+and allow new files. A file of that name is replaced and keeps its permissions, and a symlink's
+target file is replaced; a folder of that name, a name that is no file, or a read-only file is an
+`ArgumentError`, and nothing is written.
 
 The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the loaders read. It
 holds no `SMF`, so SMITE tools that also load an `SMF` need one from the original results file.

@@ -20,8 +20,9 @@ end
     through_code(s) = s[1:last(findlast("```\n", s))]
     @test through_code(section(readme, "Quick start")) == through_code(section(home, "Quick start"))
     @test section(readme, "Where it fits") == section(home, "Where it fits")
-    # The examples use SMLMCore's types, so Installation adds SMLMCore
+    # The examples use SMLMCore's types, so Installation adds SMLMCore; both say the same
     for text in (readme, home)
         @test occursin("Pkg.add(\"SMLMCore\")", section(text, "Installation"))
     end
+    @test section(readme, "Installation") == section(home, "Installation")
 end

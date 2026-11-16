@@ -18,6 +18,7 @@ using SMLMio
 
 smd = SmiteSMD("path/to/data", "localizations.mat")
 smld = load_smite_2d(smd)
+mkpath("path/to/output")
 save_smite(smld, "path/to/output", "copy.mat")
 ```
 """

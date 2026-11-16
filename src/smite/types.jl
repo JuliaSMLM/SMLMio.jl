@@ -67,7 +67,7 @@ SMLD of the fit emitters of a SMITE SMD; the SMD's other fields are kept in `met
 # Constructors
 Returned by [`load_smite_2d`](@ref) and [`load_smite_3d`](@ref), with `T` = `Float64`. To build
 one, give both type parameters: `SmiteSMLD{Float64,E}(emitters, camera, n_frames, n_datasets,
-metadata)`. [`save_smite`](@ref) takes any SMLD, so building one is rarely needed.
+metadata)`. [`save_smite`](@ref) takes any SMLD of fit emitters, so building one is rarely needed.
 """
 struct SmiteSMLD{T,E<:AbstractEmitter} <: AbstractSMLD
     emitters::Vector{E}

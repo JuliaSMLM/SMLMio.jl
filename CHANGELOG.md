@@ -63,11 +63,15 @@ found by reading SMITE's code or by review, and each has a test that fails witho
   with non-string keys, after MAT had truncated the target, so saving over an existing file
   destroyed it. It now checks every key (and every nested Dict's keys) first and throws one
   `ArgumentError` naming all offending keys, and writes to a temporary file in the target's
-  folder that replaces the target only on success, so a failed save never destroys a file.
+  folder that is renamed over the target only on success, so a failed save never destroys a
+  file. A target that is a folder, a name that is no file, a missing folder and a read-only file
+  are `ArgumentError`s before anything is written; a replaced file keeps its permissions, and a
+  symlink's target file is replaced.
 - A `FrameNum`, `DatasetNum` or `ConnectID` that is not a whole number threw `InexactError`; it
-  is now an `ArgumentError` naming the field. An SMD whose `NFrames` or `NDatasets` holds one
-  value per dataset (datasets of different lengths) was reported as having none; the error now
-  says how many values the file holds.
+  is now an `ArgumentError` naming the field (`DatasetNum` and `ConnectID` are checked on the
+  loaded rows only). So are `XSize`, `YSize`, `NFrames`, `NDatasets` and `ZSize`. An SMD whose
+  `NFrames` or `NDatasets` holds a list of values was reported as having none; the error now says
+  how many values the file holds.
 - `SmiteSMD` and `save_smite` take any string type for paths (a `SubString`, for example), not
   only `String`. `SmiteSMD` shows its whole folder path, so its compact form reads as the
   constructor call that rebuilds it.

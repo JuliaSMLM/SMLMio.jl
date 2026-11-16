@@ -43,11 +43,9 @@ end
 
 ## Where it fits
 
-SMLMio takes and returns SMLMCore's types ([SMLMCore](https://JuliaSMLM.github.io/SMLMCore.jl/stable)).
-From SMLMData 0.7.2 (not yet released), SMLMData loads and re-exports SMLMCore and SMLMio, so
-`using SMLMData` code keeps working. Its SMITE results change as the
-[CHANGELOG](https://github.com/JuliaSMLM/SMLMio.jl/blob/main/CHANGELOG.md) lists: positions are
-in microns, and a file without `PixelSize` needs `pixel_size`.
+SMLMio takes and returns [SMLMCore](https://JuliaSMLM.github.io/SMLMCore.jl/stable)'s types. From
+SMLMData 0.7.2 (not yet released), SMLMData re-exports both, so `using SMLMData` code keeps working,
+with SMITE results changed as the [CHANGELOG](https://github.com/JuliaSMLM/SMLMio.jl/blob/main/CHANGELOG.md) lists.
 
 ## Documentation
 
