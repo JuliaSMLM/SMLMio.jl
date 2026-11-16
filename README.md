@@ -4,7 +4,7 @@ SMLMio reads and writes the lab's file formats for single-molecule localization 
 data. It provides SMITE `.mat` file I/O using SMLMCore's emitters and cameras.
 
 [![CI](https://github.com/JuliaSMLM/SMLMio.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaSMLM/SMLMio.jl/actions/workflows/CI.yml)
-[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaSMLM.github.io/SMLMio.jl/dev/)
+[![Docs: stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaSMLM.github.io/SMLMio.jl/stable)
 
 SMLMio 0.1 holds SMLMData 0.7.1's SMITE I/O with its bugs fixed: positions convert between
 SMITE's pixels and microns, the loaders read files whose optional fields are empty or one per
@@ -56,9 +56,10 @@ so existing `using SMLMData` code is unchanged by the split (SMLMData 0.7.2 and 
 
 ## Documentation
 
-See the [documentation](https://JuliaSMLM.github.io/SMLMio.jl/dev/) for
-[SMITE files](https://JuliaSMLM.github.io/SMLMio.jl/dev/smite/) and the
-[API](https://JuliaSMLM.github.io/SMLMio.jl/dev/api/).
+See the [documentation](https://JuliaSMLM.github.io/SMLMio.jl/stable/) for the
+[tutorial](https://JuliaSMLM.github.io/SMLMio.jl/stable/tutorial/),
+[SMITE files](https://JuliaSMLM.github.io/SMLMio.jl/stable/guide/smite/) and the
+[API](https://JuliaSMLM.github.io/SMLMio.jl/stable/api/).
 
 ## License
 
