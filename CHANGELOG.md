@@ -91,9 +91,15 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   file locking on, HDF5 truncates a file before it finds another program's lock on it, so
   replacing a file another program had open left it empty with only HDF5's lock error. The file
   is still emptied (a limit, as in 0.1.0: `save_smite` does not coordinate with other programs
-  using the file), but a refusal that changed the file now says the file is incomplete. A new
-  file is created exclusively after the save is staged, so a file that appeared at the name
-  meanwhile is treated as an existing one, and a failed save removes only a file it created.
+  using the file, and the guide lists what that means), but a refusal that changed the file (its
+  size, times or first bytes), or after which that cannot be established, now says the file is
+  (or may be) incomplete. A new file is created exclusively after the save is staged and written
+  through the open that created it, so a file that appeared at the name meanwhile is treated as
+  an existing one, and a failed save removes a file only while the name is still the one it
+  created.
+- `save_smite` failed on metadata whose value type is narrower than `Any` (a
+  `Dict{String,String}` with an empty `PixelSize`, from a custom SMLD type) while making SMITE's
+  empty text an empty array; it reads a copy that takes any value.
 - The final copy ignored how many bytes each write took, so a write cut short without an error
   (a file size limit) reported success and left a file that does not load. Each write must take
   all its bytes and the file must end up as long as the copy; otherwise the error says the file

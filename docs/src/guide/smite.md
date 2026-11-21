@@ -145,13 +145,25 @@ library, so with those versions (MAT allows HDF5.jl 0.14 and later) use MAT and 
 thread at a time in the whole session: loads and saves, SMLMio's and any other. A save that
 fails while writing (MAT refusing a value) leaves an existing file as it was and creates none.
 An existing file this session holds open through HDF5 is refused before it is touched (HDF5
-refuses to recreate it). `save_smite` does not coordinate with other programs using the same
-file at the same time: an existing file is rewritten in place, as a direct write would rewrite
-it. With HDF5 file locking on (for example `HDF5_USE_FILE_LOCKING=TRUE` when the program
-starts), replacing a file another program has open through HDF5 empties it, because
-HDF5 truncates the file before it finds that program's lock, as in 0.1.0; the error then says
-the file is incomplete. A file that appears at the name while a save is staged is treated as an
-existing file, and a failed save removes only a file it created itself. An existing file keeps
+refuses to recreate it); when HDF5 refuses it after changing it, or whether it changed cannot be
+established, the error says the file is (or may be) incomplete. A new file is created only if
+nothing is at the name, and written through the open that created it (a folder whose default
+permissions make new files read-only still gets the file); a file that appears at the name
+while a save is staged is treated as an existing file, and a failed save removes a file only
+while the name is still the file it created.
+
+`save_smite` does not coordinate with other programs using the same file at the same time; an
+existing file is rewritten in place, as a direct write would rewrite it, and as in 0.1.0:
+
+- With HDF5 file locking on (for example `HDF5_USE_FILE_LOCKING=TRUE` when the program starts),
+  replacing a file another program has open through HDF5 empties it, because HDF5 truncates the
+  file before it finds that program's lock; the error then says the file is incomplete.
+- Two programs saving to the same file at once can leave a file that holds parts of both saves,
+  each reporting success. Save each result to its own file, or one at a time.
+- A program that renames or replaces the file while a save rewrites it can have the save write
+  into, or the cleanup of a failed new file miss, the file it put there.
+
+An existing file keeps
 its owner, permissions and links, as with a direct write (for a symlink, the file it points to
 is rewritten). An error once the file is being rewritten (a full disk, a file size limit, a
 lost network share, an interruption) can leave it partly written, as with a direct write; the

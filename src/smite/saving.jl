@@ -287,28 +287,39 @@ function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate)
     tmp = joinpath(stage, "SMD.mat")
     try
         matwrite(tmp, Dict("SMD" => s))
-        # A new file is created here, exclusively, so that a failure removes only a file this save
-        # made; one that appeared at the target while the save was staged is an existing file
-        created = !existed && _create_new(target)
-        if !created
+        # A new file is created here, exclusively, and written through the descriptor that created
+        # it (as one open, so a folder whose default permissions make new files read-only still
+        # gets the file); one that appeared at the name while the save was staged is an existing file
+        created = existed ? nothing : _create_new(target)
+        if created === nothing
             _check_space(target, filesize(tmp) - filesize(target))
             # HDF5 refuses to recreate a file this session holds open, before it truncates it. With
             # file locking on, it truncates a file another program holds locked and then refuses
-            # it: a refusal that changed the file is reported as an incomplete file
-            st0 = stat(target)
+            # it: a refusal that changed the file, or whose effect cannot be established, is
+            # reported as an incomplete file
+            before = _file_state(target)
             try
                 recreate(target)
             catch e
-                _unchanged(st0, stat(target)) && rethrow()
-                _incomplete(target, e)
+                after = _file_state(target)
+                before === nothing || after === nothing ? _incomplete(target, e; certain=false) :
+                    isequal(after, before) ? rethrow() : _incomplete(target, e)
             end
         end
         try
-            copy(tmp, target)
+            copy(tmp, created === nothing ? target : created)
         catch e
-            # A new file that could not be finished is removed
-            created && (try rm(target; force=true) catch end; rethrow())
+            # A new file that could not be finished is removed, when the name is still that file
+            if created !== nothing
+                try
+                    _same_file(target, created) && rm(target; force=true)
+                catch
+                end
+                rethrow()
+            end
             _incomplete(target, e)
+        finally
+            created === nothing || close(created)
         end
     finally
         rm(stage; recursive=true, force=true)
@@ -317,30 +328,41 @@ function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate)
 end
 
 _recreate(target) = close(matopen(target, "w"))
-# The file's size and times are as they were
-_unchanged(a, b) = a.size == b.size && a.mtime == b.mtime && a.ctime == b.ctime
+# What says whether a file was changed: its size, times and first 4 KiB (HDF5's superblock, after
+# MATLAB's 512-byte header); nothing when that cannot be read
+function _file_state(path)
+    try
+        st = stat(path)
+        head = open(io -> read(io, 4096), path, "r")
+        return (st.size, st.mtime, st.ctime, head)
+    catch
+        return nothing
+    end
+end
+_same_file(path, f) = (a = stat(path); b = stat(f); a.device == b.device && a.inode == b.inode)
 
-# Creates `path` empty, only if nothing is there (O_EXCL): true when it did, false when a file is
-# already there; any other failure is an ArgumentError naming the file.
+# Creates `path` empty, only if nothing is there (O_EXCL), and returns it open for writing;
+# nothing when a file is already there. Any other failure is an ArgumentError naming the file.
 function _create_new(path)
     F = Base.Filesystem
-    f = try
-        F.open(path, F.JL_O_WRONLY | F.JL_O_CREAT | F.JL_O_EXCL, 0o666)
+    try
+        return F.open(path, F.JL_O_WRONLY | F.JL_O_CREAT | F.JL_O_EXCL, 0o666)
     catch e
-        e isa Base.IOError && e.code == Base.UV_EEXIST && return false
+        e isa Base.IOError && e.code == Base.UV_EEXIST && return nothing
         e isa Base.IOError || rethrow()
         throw(ArgumentError("save_smite: $(repr(path)) cannot be created: $(sprint(showerror, e))"))
     end
-    close(f)
-    return true
 end
 
-# An existing file was truncated and not rewritten in full: say so, and that the data can be saved
-# again (an interrupt in a warning, and passed on as it is)
-function _incomplete(target, e)
-    msg = "save_smite: writing $(repr(target)) failed partway, so that file is now incomplete and " *
-          "its old contents are gone. The data are unchanged in memory: save again once the cause " *
-          "is fixed."
+# An existing file was truncated and not rewritten in full (or, `certain` false, whether it was
+# changed cannot be established): say so, and that the data can be saved again (an interrupt in a
+# warning, and passed on as it is)
+function _incomplete(target, e; certain=true)
+    msg = (certain ? "save_smite: writing $(repr(target)) failed partway, so that file is now " *
+                     "incomplete and its old contents are gone." :
+                     "save_smite: writing $(repr(target)) failed, and whether that file was changed " *
+                     "cannot be established, so it may be incomplete.") *
+          " The data are unchanged in memory: save again once the cause is fixed."
     e isa InterruptException && (@warn("$msg The save was interrupted."); rethrow())
     error("$msg The error was: $(sprint(showerror, e))")
 end
@@ -351,20 +373,20 @@ end
 # an existing one).
 _staging_dir() = mktempdir(tempdir(); prefix=string("smlmio-", getpid(), "-"), cleanup=false)
 
-# Copies the file `src` into `dst` in place (truncating it, or creating it). A write can take fewer
-# bytes than it was given without an error (a file size limit): each write must take them all, and
-# the file must end up as long as `src` (a short write when the last bytes are flushed included).
-function _copy_into(src, dst)
-    open(src, "r") do from
-        open(dst, "w") do to
-            _copy_stream(from, to)
-            flush(to)
-        end
-    end
-    a, b = filesize(dst), filesize(src)
-    a == b || error("$(repr(dst)) holds $a of the $b bytes written")
-    return nothing
+# Copies the file `src` into `dst` in place (truncating it), or into a new file open for writing
+# (`dst` an IO, from _create_new). A write can take fewer bytes than it was given without an error
+# (a file size limit): each write must take them all, and the file must end up as long as `src` (a
+# short write when the last bytes are flushed included).
+function _copy_into(src, dst::AbstractString)
+    open(to -> _copy_from(src, to), dst, "w")
+    _check_length(filesize(dst), filesize(src), dst)
 end
+function _copy_into(src, dst::IO)
+    _copy_from(src, dst)
+    _check_length(stat(dst).size, filesize(src), "the new file")
+end
+_copy_from(src, to) = (open(from -> _copy_stream(from, to), src, "r"); flush(to))
+_check_length(a, b, what) = a == b ? nothing : error("$(what isa AbstractString ? repr(what) : what) holds $a of the $b bytes written")
 function _copy_stream(from::IO, to::IO)
     buf = Vector{UInt8}(undef, 1 << 20)
     while !eof(from)
@@ -533,10 +555,11 @@ function _mat_writable(v::Dict)
 end
 _mat_writable(v) = v
 
-# The metadata as save_smite reads it, a copy: every value made writable (_mat_writable), and empty
-# text in SMITE's own fields made an empty array, as the loaders do (_smite_empty_text!).
+# The metadata as save_smite reads it, a copy that takes any value (metadata of a narrower value
+# type, such as Dict{String,String}, included): every value made writable (_mat_writable), and
+# empty text in SMITE's own fields made an empty array, as the loaders do (_smite_empty_text!).
 function _smite_metadata(md)
-    out = copy(md)
+    out = Dict{keytype(md),Any}(md)
     for (k, v) in md
         out[k] = _mat_writable(v)
     end

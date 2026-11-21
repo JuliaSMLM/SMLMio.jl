@@ -478,7 +478,8 @@ end
             # With file locking on, HDF5 truncates a file another program holds locked and then
             # refuses it (shown outside the suite: HDF5 reads its locking setting when it starts).
             # A refusal that left the file as it was is passed on as it is; one that changed it is
-            # reported as an incomplete file, whatever the file's length then
+            # reported as an incomplete file, whatever the file's length and times then (its first
+            # bytes are compared too); one after which the file cannot be read, as possibly incomplete
             s = Dict{String,Any}("X" => [1.0])
             now = read(joinpath(dir, "r.mat"))
             refused(t) = error("unable to lock file")
@@ -486,7 +487,11 @@ end
             @test read(joinpath(dir, "r.mat")) == now
             same_length(t) = (write(t, zeros(UInt8, length(now))); error("unable to lock file"))
             err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; recreate=same_length); nothing catch ex; ex end
-            @test err isa ErrorException && occursin("incomplete", err.msg) && occursin("unable to lock", err.msg)
+            @test err isa ErrorException && occursin("now incomplete", err.msg) && occursin("unable to lock", err.msg)
+            save_smite(good, dir, "r.mat")
+            gone(t) = (rm(t); error("stale file handle"))
+            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; recreate=gone); nothing catch ex; ex end
+            @test err isa ErrorException && occursin("may be incomplete", err.msg) && occursin("stale file handle", err.msg)
             @test isempty(ours())
             save_smite(good, dir, "r.mat")
         end
@@ -495,10 +500,32 @@ end
             # A file that appears at the target while a save is staged is an existing file: it is
             # rewritten in place and kept if the copy fails, never removed
             p = joinpath(dir, "excl.mat")
-            @test SMLMio._create_new(p) && isfile(p) && filesize(p) == 0
-            @test !SMLMio._create_new(p)
-            rm(p)
+            f = SMLMio._create_new(p)
+            @test f isa IO && isfile(p) && filesize(p) == 0
+            @test SMLMio._create_new(p) === nothing
+            # The new file is written through the descriptor that created it, as one open: a file
+            # the folder's default permissions make read-only still gets its contents
+            chmod(p, 0o444)
+            SMLMio._copy_into(joinpath(dir, "r.mat"), f)
+            close(f)
+            @test read(p) == read(joinpath(dir, "r.mat"))
+            chmod(p, 0o644); rm(p)
             @test_throws r"cannot be created" SMLMio._create_new(joinpath(dir, "no-such-folder", "x.mat"))
+            # A failed save leaves a file another program put at the name meanwhile
+            s = Dict{String,Any}("X" => [1.0])
+            q = joinpath(dir, "swapped.mat")
+            swapped(src, dst) = (rm(q); write(q, "another program's file"); error("disk full"))
+            @test_throws r"disk full" SMLMio._write_smd(q, s; copy=swapped)
+            @test read(q, String) == "another program's file"
+            rm(q)
+            @test isempty(ours())
+        end
+
+        @testset "metadata of a narrower value type" begin
+            # SMITE's empty text is made an empty array in the copy save_smite reads, whatever the
+            # metadata's value type (0.1.0 saved such metadata)
+            md = SMLMio._smite_metadata(Dict{String,String}("PixelSize" => "", "Comment" => "x"))
+            @test md["PixelSize"] == zeros(0, 0) && md["Comment"] == "x"
         end
 
         @testset "too little free space is refused before the file is touched" begin
