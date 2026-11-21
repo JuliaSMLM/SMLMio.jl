@@ -86,8 +86,9 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   `PixelSize`, `XSize`, `YSize`, `NFrames` or `NDatasets` of several values, saying how many the
   file holds; a `pixel_size` passed to the loader does not stand in for such a `PixelSize`.
 - **3D.** SMITE's SMD has no `ZSize`. Every `ZSize` stays in the metadata, so `save_smite` writes
-  it back. When it is one number, `load_smite_3d` also appends it to `data_size`; it must then be
-  a whole number of at least 0. A `ZSize` of several values or text is only kept in the metadata.
+  it back, and none is an error: when it is one whole number of at least 0, `load_smite_3d` also
+  appends it to `data_size`; any other `ZSize` (several values, text, -1) is only kept in the
+  metadata.
   `load_smite_2d` on a file with `NDims` 3 warns that it leaves `Z` out (kept in the metadata).
 - **Rows or columns.** An SMD built by hand in MATLAB with row vectors loads like SMITE's
   columns.

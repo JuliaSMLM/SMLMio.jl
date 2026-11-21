@@ -729,8 +729,11 @@ end
             s = smite_smd(3); s[key] = v
             @test_throws Regex("$key must be a whole number") load_smite_2d(write_smd(dir, "size_$key.mat", s))
         end
+        # ZSize, which SMITE does not write, is never an error: one that is not a whole number
+        # stays in the metadata only (0.1.0 refused the file)
         s = smite_smd_3d(3); s["ZSize"] = 7.5
-        @test_throws r"ZSize must be a whole number" load_smite_3d(write_smd(dir, "size_ZSize.mat", s))
+        smld = load_smite_3d(write_smd(dir, "size_ZSize.mat", s))
+        @test smld.metadata["data_size"] == [64, 64] && smld.metadata["ZSize"] == 7.5
 
         # DatasetNum and ConnectID are checked on the loaded rows only: a row dropped by the
         # complex screening may hold anything, as before
@@ -822,24 +825,28 @@ end
         @test_throws r"16777217 × 1 pixels of 1.0 µm do not give finite, increasing" ld("pxwide.mat", s)
         s["PixelSize"] = 1.0                       # in Float64 the same image is fine
         @test length(ld("pxwide64.mat", s).camera.pixel_edges_x) == 2^24 + 2
-        # ZSize, which SMITE does not write: in 3D one number is appended to data_size, a whole
-        # number of at least 0; several values or text are kept in the metadata only, as in
-        # 0.1.0. Every ZSize stays in the metadata.
+        # ZSize, which SMITE does not write: in 3D a ZSize that is one whole number of at least 0
+        # is appended to data_size; every ZSize stays in the metadata (0.1.0's 3D loader dropped
+        # one of several values or text, and refused one that was not whole)
         ld3(name, s) = load_smite_3d(write_smd(dir, name, s))
         s3 = smite_smd_3d(3); s3["ZSize"] = 0.0
         @test ld3("zs0.mat", s3).metadata["data_size"] == [64, 64, 0]
         s3 = smite_smd_3d(3); s3["ZSize"] = 11.0
         smld = ld3("zs11.mat", s3)
         @test smld.metadata["data_size"] == [64, 64, 11] && smld.metadata["ZSize"] == 11
-        for v in (col([5.0, 6.0]), "text")
+        for v in (col([5.0, 6.0]), "text", -2.0, 2.5, 3.0 + 1.0im)
             s3 = smite_smd_3d(3); s3["ZSize"] = v
             smld = ld3("zsodd.mat", s3)
             @test smld.metadata["data_size"] == [64, 64] && smld.metadata["ZSize"] == v
         end
-        s3 = smite_smd_3d(3); s3["ZSize"] = -2.0
-        @test_throws r"ZSize must be a whole number of at least 0" ld3("zsneg.mat", s3)
         s = smite_smd(3); s["ZSize"] = "not read in 2D"
         @test ld("zs2d.mat", s).metadata["ZSize"] == "not read in 2D"
+        # So any ZSize save_smite writes back loads: a native 3D SMLD's metadata ZSize of -1
+        e3 = Emitter3DFit{Float64}(1.0, 1.5, 0.5, 1000.0, 10.0, 0.01, 0.01, 0.125, 50.0, 2.0)
+        save_smite(BasicSMLD([e3], IdealCamera(1:64, 1:64, 0.1), 1, 1, Dict{String,Any}("ZSize" => -1.0)),
+                   dir, "zsneg-saved.mat")
+        smld = load_smite_3d(SmiteSMD(dir, "zsneg-saved.mat"))
+        @test smld.metadata["data_size"] == [64, 64] && smld.metadata["ZSize"] == -1
         # A 3D round trip keeps ZSize
         s3 = smite_smd_3d(3); s3["ZSize"] = 11.0
         save_smite(ld3("zsrt.mat", s3), dir, "zsrt-saved.mat")

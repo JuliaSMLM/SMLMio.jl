@@ -152,8 +152,7 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     (nframes === nothing || ndatasets === nothing) && throw(ArgumentError(
         "$where has no NFrames or NDatasets"))
     xsize, ysize = _smite_count(where, "XSize", xsize), _smite_count(where, "YSize", ysize)
-    nframes = _smite_count(where, "NFrames", nframes, _SMITE_COUNT_MIN["NFrames"])
-    ndatasets = _smite_count(where, "NDatasets", ndatasets, _SMITE_COUNT_MIN["NDatasets"])
+    nframes, ndatasets = _smite_count(where, "NFrames", nframes), _smite_count(where, "NDatasets", ndatasets)
     camera = IdealCamera(1:xsize, 1:ysize, px)
     # In Float32, a large image or pixel size can give edges that are not finite or that round
     # onto each other
@@ -206,12 +205,14 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
 
     # Metadata
     data_size = [ysize, xsize]
-    # SMITE's SMD has no ZSize. load_smite_3d appends one number to data_size (a whole number of
-    # at least 0); a ZSize of several values or text is only kept in the metadata, as is every
-    # ZSize, so that save_smite writes it back.
+    # SMITE's SMD has no ZSize, and nothing here depends on one: load_smite_3d appends a ZSize that
+    # is one whole number of at least 0 to data_size, and every ZSize stays in the metadata (so
+    # save_smite writes it back), whatever it holds.
     zsize = get(s, "ZSize", nothing)
-    three_d && _smite_length(zsize) == 1 && first(zsize) isa Number &&
-        push!(data_size, _smite_count(where, "ZSize", first(zsize), 0))
+    if three_d && _smite_length(zsize) == 1
+        z = first(zsize)
+        _fits_int(z) && real(z) >= 0 && push!(data_size, Int(real(z)))
+    end
     # Every other SMITE field, and the raw value of an optional field loaded as its default
     used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"]))
     setdiff!(used, defaulted)
@@ -244,13 +245,14 @@ end
 _fits_int(x) = x isa Number && iszero(imag(x)) && isinteger(real(x)) &&
                typemin(Int) <= real(x) <= typemax(Int)
 
-# Lower bounds of the counts, which save_smite applies too, so that every file it writes loads.
-# An image needs a pixel; n_frames 0 means "unknown" in the lab's packages (frame connection,
-# trajectories), and n_datasets 0 an SMLD without datasets.
+# Lower bounds of the image sizes and counts, which save_smite applies too, so that every file it
+# writes loads. An image needs a pixel; n_frames 0 means "unknown" in the lab's packages (frame
+# connection, trajectories), and n_datasets 0 an SMLD without datasets.
 const _SMITE_COUNT_MIN = Dict("XSize" => 1, "YSize" => 1, "NFrames" => 0, "NDatasets" => 0)
 
-# An image size or count as an Int: a whole number of at least `lo`.
-function _smite_count(where, key, v, lo=1)
+# An image size or count as an Int: a whole number of at least its bound.
+function _smite_count(where, key, v)
+    lo = _SMITE_COUNT_MIN[key]
     _fits_int(v) && real(v) >= lo ||
         throw(ArgumentError("$where: $key must be a whole number of at least $lo, but is $v"))
     return Int(real(v))
@@ -319,8 +321,8 @@ Load a 3D SMITE SMD into a [`SmiteSMLD`](@ref) of `Emitter3DFit{Float64}`.
 
 Positions load as in [`load_smite_2d`](@ref); `Z` and `Z_SE` are µm in SMITE and load
 unchanged. The file also needs `Z` and `Z_SE` with one value per localization. SMITE's SMD has
-no `ZSize`; when a file has one, it is appended to `metadata["data_size"]`, and a `ZSize` that
-is not a whole number is an `ArgumentError`. Everything else (optional fields, metadata,
+no `ZSize`; every `ZSize` a file has stays in the metadata, and one that is one whole number of
+at least 0 is also appended to `metadata["data_size"]`. Everything else (optional fields, metadata,
 `pixel_size`, the errors it throws) is as in [`load_smite_2d`](@ref).
 
 # Arguments
