@@ -27,9 +27,11 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   and nothing is written.
 - The loaders refused a per-localization field stored as a MATLAB cell of numbers (MAT reads it
   as an array of `Any`), which SMLMData 0.7.1 loaded: "Photons is not numeric". Such a field
-  now loads as a numeric column. An optional field (`Photons_SE`, `Bg_SE`, `DatasetNum`,
-  `ConnectID`) holding something other than numbers is an `ArgumentError` naming it, where it
-  failed later with a `MethodError`.
+  now loads as a numeric column, each value checked and converted as stored, so an integer
+  frame or track id in a cell is never rounded. An optional field (`Photons_SE`, `Bg_SE`,
+  `DatasetNum`, `ConnectID`) holding something other than numbers, text included, is an
+  `ArgumentError` naming it, where it failed later with a `MethodError` or, for text, loaded
+  as a column of defaults.
 - `save_smite` of emitters of `Float32` and `Float64` together (a `Union` element type) wrote
   `Photons`, `Bg`, their errors and `Z`, `Z_SE` as MATLAB cells, which MAT makes of a vector of
   mixed types, so `load_smite_3d` refused its own file. Such columns are now written as double

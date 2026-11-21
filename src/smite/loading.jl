@@ -4,7 +4,7 @@ function _complex_rows(cols, fields)
     rows = Dict{String,Vector{Int}}()
     for f in fields
         v = cols[f]
-        eltype(v) <: Complex || continue
+        eltype(v) <: Real && continue      # a cell's values may be complex in a Vector{Number}
         r = findall(x -> !iszero(imag(x)), v)
         isempty(r) || (rows[f] = r)
     end
@@ -20,15 +20,18 @@ _smite_vec(v::Number) = [v]
 
 # A per-localization field as a vector of numbers, or nothing when it is not numeric. MAT reads a
 # MATLAB cell of numbers (single and double values together, say) as an array of Any; its values
-# are promoted to one type.
+# are kept as stored, in a Vector{Number}, and each is checked and converted on its own where it
+# is used: promoting them to one type could round them (an Int64 with a Float32 gives Float32).
 function _smite_numeric(v)
     v isa Number && return [v]
     v isa AbstractArray || return nothing
     v isa AbstractArray{<:Number} && return vec(v)
     all(x -> x isa Number, v) || return nothing
-    T = isempty(v) ? Float64 : mapreduce(typeof, promote_type, v)
-    return convert(Vector{T}, vec(v))
+    return Number[x for x in vec(v)]
 end
+
+# A field SMITE left empty: a 0 x 0 matrix (or an empty cell or text).
+_smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
 
 # A scalar field (XSize, PixelSize, ...) as the file stores it, or nothing when it is absent or
 # empty; the caller checks it before converting it. Several values, or a value that is not a
@@ -107,14 +110,16 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     mismatched = String[]
     for (key, default) in _SMITE_OPTIONAL
         v = get(s, key, nothing)
-        if v !== nothing && _smite_length(v) == n
-            c = _smite_numeric(v)
-            c === nothing && throw(ArgumentError("$where: $key is not numeric"))
+        c = v === nothing ? nothing : _smite_numeric(v)
+        # Present and not empty, an optional field must be numeric
+        v !== nothing && c === nothing && !_smite_empty(v) &&
+            throw(ArgumentError("$where: $key is not numeric"))
+        if c !== nothing && length(c) == n
             cols[key] = c
         else
             cols[key] = fill(default, n)
             push!(defaulted, key)
-            v !== nothing && _smite_length(v) > 0 && push!(mismatched, key)
+            c !== nothing && !isempty(c) && push!(mismatched, key)
         end
     end
     !three_d && _is_ndims3(get(s, "NDims", nothing)) && n > 0 && _smite_length(get(s, "Z", nothing)) == n &&

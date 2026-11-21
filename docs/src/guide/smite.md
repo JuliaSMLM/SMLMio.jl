@@ -92,8 +92,10 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
 - **Rows or columns.** An SMD built by hand in MATLAB with row vectors loads like SMITE's
   columns.
 - **Cells of numbers.** A per-localization field stored as a MATLAB cell of numbers (single
-  and double values together, say) loads like a numeric column. A per-localization field
-  that holds anything else (text, an empty cell element) is an error naming it.
+  and double values together, say) loads like a numeric column, each value checked and
+  converted as stored (an integer in a cell is not rounded through single precision). A
+  per-localization field that holds anything else (text, an empty cell element) is an error
+  naming it, for the optional fields too; an empty one is a field left empty.
 - **Complex values.** Localizations with a non-zero imaginary part in any position, photon or
   background field are dropped with a warning.
 

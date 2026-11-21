@@ -215,9 +215,37 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             smld3 = load_smite_3d(write_smd(dir, "cells3.mat", s3))
             @test [e.z for e in smld3.emitters] == [-0.25, 0.5]
             @test [e.σ_z for e in smld3.emitters] ≈ [0.04, 0.05]
+            # Each value keeps its stored type: no promotion that rounds (an Int64 with a Float32
+            # would become Float32) or fails (Int64 with UInt64)
+            s = smite_smd(2)
+            s["FrameNum"] = Any[Int64(16_777_217), 1.0f0]
+            s["Photons"] = Any[Int64(16_777_217), 1.0f0]
+            s["ConnectID"] = Any[Int64(-1), UInt64(3)]
+            smld = load_smite_2d(write_smd(dir, "cellexact.mat", s))
+            @test [e.frame for e in smld.emitters] == [16_777_217, 1]
+            @test smld.metadata["smite_row_frames"] == [16_777_217, 1]
+            @test [e.photons for e in smld.emitters] == [16_777_217.0, 1.0]
+            @test [e.track_id for e in smld.emitters] == [-1, 3]
+            if Sys.WORD_SIZE == 64
+                s = smite_smd(2); s["ConnectID"] = Any[Int64(2)^53 + 1, 2.0]
+                @test [e.track_id for e in load_smite_2d(write_smd(dir, "cellbig.mat", s)).emitters] ==
+                      [Int64(2)^53 + 1, 2]
+            end
             # Complex values in a cell are screened as in a numeric column
             s = smite_smd(2); s["Bg"] = Any[5.0, ComplexF64(5, 1)]
             @test [e.id for e in quiet(() -> load_smite_2d(write_smd(dir, "cellc.mat", s))).emitters] == [1]
+            s = smite_smd(3); s["X"] = Any[10.0, ComplexF32(20, 1), Int64(30)]
+            @test [e.id for e in quiet(() -> load_smite_2d(write_smd(dir, "cellcx.mat", s))).emitters] == [1, 3]
+            # Text in an optional field is an error too, not a column of defaults; an empty one
+            # is a field SMITE left empty
+            for (key, v) in (("ConnectID", "x"), ("Bg_SE", "bad"), ("Photons_SE", "per dataset"))
+                s = smite_smd(2); s[key] = v
+                @test_throws Regex("$key is not numeric") load_smite_2d(write_smd(dir, "opttext_$key.mat", s))
+            end
+            s = smite_smd(2); s["ConnectID"] = ""
+            smld = load_smite_2d(write_smd(dir, "optempty.mat", s))
+            @test [e.track_id for e in smld.emitters] == [0, 0]
+            @test "ConnectID" in smld.metadata["smite_defaulted_fields"]
             # A cell holding anything but numbers is an ArgumentError naming the field, required
             # or optional (an optional one used to fail later with a MethodError)
             for (key, v) in (("Photons", Any["a", "b"]), ("Y", Any[1.0, zeros(0, 0)]),
