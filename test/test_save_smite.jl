@@ -4,6 +4,16 @@ using SMLMio, Test
 using SMLMCore: SMLMCore, IdealCamera, Emitter2DFit, Emitter3DFit, emitter_ndims
 using MAT: MAT, matread, matwrite, matopen
 
+# An IO that takes at most `cap` bytes in all, as a file under a size limit does: a write past the
+# limit takes what fits and says how many bytes it took, without an error
+struct CappedIO <: IO
+    buf::IOBuffer
+    cap::Int
+end
+Base.unsafe_write(c::CappedIO, p::Ptr{UInt8}, n::UInt) =
+    unsafe_write(c.buf, p, min(n, UInt(max(c.cap - position(c.buf), 0))))
+Base.write(c::CappedIO, x::UInt8) = position(c.buf) < c.cap ? write(c.buf, x) : 0
+
 mutable struct ForeignEmitter3DFit{T} <: SMLMCore.AbstractEmitter   # for save_smite
     x::T; y::T; z::T; photons::T; bg::T; σ_x::T; σ_y::T; σ_z::T; σ_photons::T; σ_bg::T
     frame::Int; dataset::Int; track_id::Int; id::Int
@@ -359,6 +369,12 @@ end
     e = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
     mk(md) = SmiteSMLD{Float64,Emitter2DFit{Float64}}([e], cam, 1, 1, md)
     good = mk(Dict{String,Any}("analysis_date" => "today"))
+    # Saves stage in the system's temporary folder: a private one here, so that only this test's
+    # staging folders are counted (other processes sharing the system's folder, containers with
+    # the same process id among them, can hold folders with the same prefix)
+    private = mktempdir()
+    ours() = filter(startswith("smlmio-"), readdir(private))
+    withenv("TMPDIR" => private, "TMP" => private, "TEMP" => private) do
     mktempdir() do dir
         save_smite(good, dir, "r.mat")
         before = read(joinpath(dir, "r.mat"))
@@ -423,8 +439,8 @@ end
             @test readdir(dir) == ["r.mat"]
         end
 
-        # The temporary copies live in the system's temporary folder: none may be left there
-        ours() = filter(startswith("smlmio-$(getpid())-"), readdir(tempdir()))
+        # No staging folder may be left in the temporary folder
+        @test tempdir() == private
         @testset "saves running at once never share a temporary file" begin
             # Each save writes in a new folder of its own (mkdtemp), not at a name from the clock,
             # which two threads can read at the same nanosecond, nor from a process id, which
@@ -458,6 +474,22 @@ end
             @test isempty(ours())
         end
 
+        @testset "a file another program holds locked is refused before it is touched" begin
+            # HDF5 with file locking on locks a file it opens (flock, shared to read); a program
+            # reading the file is stood in for by a shared lock on a separate open file. With
+            # locking on, HDF5's own recreate found that lock only after truncating the file, and
+            # left it empty (shown outside the suite: locking is set when HDF5 starts)
+            if Sys.isunix()
+                now = read(joinpath(dir, "r.mat"))
+                open(joinpath(dir, "r.mat"), "r") do held
+                    @test ccall(:flock, Cint, (Cint, Cint), fd(held), Cint(1 | 4)) == 0
+                    @test_throws r"open in another program" save_smite(good, dir, "r.mat")
+                end
+                @test read(joinpath(dir, "r.mat")) == now
+                @test isempty(ours())
+            end
+        end
+
         @testset "too little free space is refused before the file is touched" begin
             now = read(joinpath(dir, "r.mat"))
             @test_throws r"more bytes" SMLMio._check_space(joinpath(dir, "r.mat"), typemax(Int))
@@ -484,7 +516,18 @@ end
                 joinpath(dir, "r.mat"), s; copy=interrupted)
             @test isempty(ours())
         end
+
+        @testset "a write that takes fewer bytes than it was given is an error" begin
+            # As a file under a size limit does, without throwing: the copy loop checks every write
+            data = rand(UInt8, 3 << 20)
+            @test_throws r"took 65536 of 1048576 bytes" SMLMio._copy_stream(IOBuffer(data), CappedIO(IOBuffer(), 65536))
+            whole = CappedIO(IOBuffer(), length(data))
+            SMLMio._copy_stream(IOBuffer(data), whole)
+            @test take!(whole.buf) == data
+        end
     end
+    end
+    rm(private; recursive=true)
 end
 
 @testset "save_smite never removes a folder, and replaces a file as a write would" begin

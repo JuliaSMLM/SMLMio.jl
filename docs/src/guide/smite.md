@@ -141,15 +141,20 @@ which `TMPDIR` sets on Linux and macOS; it must exist and have room for one copy
 copied into place. Each save writes in a new folder of its own there, so saves of different
 files never share a temporary file, from several threads or from several processes (containers
 sharing the folder included). HDF5.jl before 0.16.13 does not lock its calls into the HDF5
-library, so with those versions (MAT allows HDF5.jl 0.14 and later) save from one thread at a
-time. A save that fails while writing (MAT
-refusing a value, the file held open by HDF5 in the same session) leaves an existing file as it
-was and creates none. An existing file keeps its owner, permissions and links, as with a direct
-write (for a symlink, the file it points to is rewritten). An error during the final copy (a full
-disk, a lost network share, an interruption) can leave the file partly written, as with a direct
-write; the error then says the file is incomplete (an interruption is passed on as it is, after a
-warning that says so). The data are unchanged in memory, so save
-again once the cause is fixed. It contains:
+library, so with those versions (MAT allows HDF5.jl 0.14 and later) use MAT and HDF5 from one
+thread at a time in the whole session: loads and saves, SMLMio's and any other. A save that
+fails while writing (MAT refusing a value) leaves an existing file as it was and creates none.
+An existing file another program or this session has open through HDF5 is refused before it is
+touched: HDF5 locks the files it opens (on Linux and macOS, unless `HDF5_USE_FILE_LOCKING` is
+`FALSE`), and with locking off HDF5 itself refuses a file this session holds open. While an
+existing file is rewritten it stays locked, so a program that opens it through HDF5 meanwhile
+is refused. An existing file keeps its owner, permissions and links, as with a direct write (for
+a symlink, the file it points to is rewritten). An error during the final copy (a full disk, a
+file size limit, a lost network share, an interruption) can leave the file partly written, as
+with a direct write; the error then says the file is incomplete (an interruption is passed on
+as it is, after a warning that says so). A write that takes fewer bytes than it was given is
+such an error, and so is a file that ends up shorter than the copy. The data are unchanged in
+memory, so save again once the cause is fixed. It contains:
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`. Each
   column is converted by its values: all `Float32` stays MATLAB single, real values are

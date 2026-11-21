@@ -24,9 +24,10 @@ Which fields are written, which are dropped and what a load gives back are on th
 
 # Notes
 - The file is written in full to a temporary file before the target is touched, so a save that
-  fails while writing leaves an existing file as it was; only an error during the final copy
-  (a full disk, a lost share) can leave it partly written. What it refuses, and how a file is
-  rewritten, are on the [SMITE files](@ref) page.
+  fails while writing leaves an existing file as it was, and a file another program holds open
+  is refused; only an error once the file is being rewritten (a full disk, a file size limit, a
+  lost share) can leave it partly written, and the error then says so. What it refuses, and how
+  a file is rewritten, are on the [SMITE files](@ref) page.
 
 - `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
   load as 0.
@@ -288,25 +289,70 @@ function _write_smd(target::String, s; copy=_copy_into)
         matwrite(tmp, Dict("SMD" => s))
         if existed
             _check_space(target, filesize(tmp) - filesize(target))
-            # HDF5 refuses to recreate a file it holds open, before anything changes
-            close(matopen(target, "w"))
+            # A program with the file open through HDF5 (another process, or this session) holds a
+            # lock on it, which HDF5 finds only after truncating the file: refused here first
+            _flock_state(target) === :busy && throw(ArgumentError("save_smite: $(repr(target)) is " *
+                "open in another program or in this session (it holds a lock on the file); close " *
+                "it and save again. Nothing was written"))
+            # HDF5 refuses to recreate a file this session holds open without a lock, before it
+            # truncates it; a refusal after truncating (a lock taken since the check) is reported as
+            # an incomplete file
+            n0 = filesize(target)
+            try
+                close(matopen(target, "w"))
+            catch e
+                filesize(target) == n0 && rethrow()
+                _incomplete(target, e)
+            end
         end
+        held = nothing
         try
+            # An existing file stays locked through the copy (where the system locks files), so that
+            # a program opening it through HDF5 meanwhile is refused rather than reading it half written
+            existed && (held = _hold_lock(target))
             copy(tmp, target)
         catch e
             # A new file that could not be finished is removed
             existed || (try rm(target; force=true) catch end; rethrow())
-            # An existing file was truncated: say so, and that the data can be saved again (an
-            # interrupt in a warning, and passed on as it is)
-            msg = "save_smite: writing $(repr(target)) failed partway, so that file is now " *
-                  "incomplete and its old contents are gone. The data are unchanged in memory: " *
-                  "save again once the cause is fixed."
-            e isa InterruptException && (@warn("$msg The save was interrupted."); rethrow())
-            error("$msg The error was: $(sprint(showerror, e))")
+            _incomplete(target, e)
+        finally
+            held === nothing || close(held)
         end
     finally
         rm(stage; recursive=true, force=true)
     end
+    return nothing
+end
+
+# An existing file was truncated and not rewritten in full: say so, and that the data can be saved
+# again (an interrupt in a warning, and passed on as it is)
+function _incomplete(target, e)
+    msg = "save_smite: writing $(repr(target)) failed partway, so that file is now incomplete and " *
+          "its old contents are gone. The data are unchanged in memory: save again once the cause " *
+          "is fixed."
+    e isa InterruptException && (@warn("$msg The save was interrupted."); rethrow())
+    error("$msg The error was: $(sprint(showerror, e))")
+end
+
+# HDF5 locks the files it opens with flock (shared to read, exclusive to write) on Linux and
+# macOS, unless HDF5_USE_FILE_LOCKING is FALSE. An exclusive, non-blocking flock on a separate open
+# file says whether a program holds such a lock: :busy; :locked when the lock was taken (held by
+# `io`); :unknown where the system or file system cannot lock.
+const _LOCK_EX, _LOCK_NB = Cint(2), Cint(4)
+function _flock(io)
+    Sys.isunix() || return :unknown
+    ccall(:flock, Cint, (Cint, Cint), fd(io), _LOCK_EX | _LOCK_NB) == 0 && return :locked
+    return Libc.errno() == Libc.EAGAIN ? :busy : :unknown
+end
+_flock_state(path) = open(_flock, path, "r")
+# The file opened and locked, to hold through the copy; nothing where the system cannot lock. A lock
+# another program took since the file was truncated is an error (the file is then incomplete).
+function _hold_lock(path)
+    io = open(path, "r")
+    state = _flock(io)
+    state === :locked && return io
+    close(io)
+    state === :busy && error("another program opened $(repr(path)) while it was being rewritten")
     return nothing
 end
 
@@ -316,17 +362,28 @@ end
 # an existing one).
 _staging_dir() = mktempdir(tempdir(); prefix=string("smlmio-", getpid(), "-"), cleanup=false)
 
-# Copies the file `src` into `dst` in place (truncating it, or creating it).
+# Copies the file `src` into `dst` in place (truncating it, or creating it). A write can take fewer
+# bytes than it was given without an error (a file size limit): each write must take them all, and
+# the file must end up as long as `src` (a short write when the last bytes are flushed included).
 function _copy_into(src, dst)
     open(src, "r") do from
         open(dst, "w") do to
-            buf = Vector{UInt8}(undef, 1 << 20)
-            while !eof(from)
-                n = readbytes!(from, buf)
-                write(to, view(buf, 1:n))
-            end
+            _copy_stream(from, to)
+            flush(to)
         end
     end
+    a, b = filesize(dst), filesize(src)
+    a == b || error("$(repr(dst)) holds $a of the $b bytes written")
+    return nothing
+end
+function _copy_stream(from::IO, to::IO)
+    buf = Vector{UInt8}(undef, 1 << 20)
+    while !eof(from)
+        n = readbytes!(from, buf)
+        w = write(to, view(buf, 1:n))
+        w == n || error("a write took $w of $n bytes (a full disk or a file size limit)")
+    end
+    return nothing
 end
 
 # Refuses before an existing file is truncated when its folder lacks the extra bytes the new
@@ -425,9 +482,10 @@ end
 # A column in SMITE's pixels: a position (`origin`, the camera's first edge) X = (x - origin) / px
 # + 0.5, or an uncertainty (`origin` nothing) X_SE = σ / px, each from the value as checked by
 # _mat_column, in Float64 (ComplexF64 for complex values) and then single when the emitters'
-# column is all Float32. The origin is subtracted exactly when it is not itself a double (a
-# BigFloat edge, _exact_sub). A finite value whose pixel value the loaders would read back as infinite, or an
-# uncertainty that would read back as 0 when it is not, is an ArgumentError naming the emitter.
+# column is all Float32. The origin, of whatever number type, is subtracted from each value
+# exactly and rounded once (_exact_sub). A finite value whose pixel value the loaders would read
+# back as infinite, or an uncertainty that would read back as 0 when it is not, is an
+# ArgumentError naming the emitter.
 function _pixel_column(what, col, origin, px)
     own = _mat_column(what, col)
     T = eltype(own) <: Complex ? Complex{Float64} : Float64
