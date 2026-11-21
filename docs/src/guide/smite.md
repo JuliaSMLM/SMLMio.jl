@@ -181,8 +181,12 @@ again once the cause is fixed. It contains:
   localizations, the loaded file's `Z` had values (SMITE writes `NDims` 2 for its own 3D fits)
   or the metadata's `NDims` is 3. `Z` and `Z_SE` in the metadata of data not loaded by SMLMio
   (built by hand, or loaded by SMLMData 0.7.1, which kept a 3D file's `Z` that way) are written
-  the same way when they hold one value per emitter, so a save and a save of its load agree;
-  with another count they are ordinary metadata. An emitter is taken to be the row its `id` names
+  the same way when they can be matched to the emitters: by each emitter's `id` when every `id`
+  is a row of the field (SMLMData 0.7.1 set `id` to the file row, so a reordering or a dropped
+  localization keeps each `z` with its emitter), or in order when no emitter has an `id` and
+  there are as many values as emitters. So a save and a save of its load agree. Such a field
+  with as many values as emitters that cannot be matched is dropped with a warning; with another
+  count it is ordinary metadata. An emitter is taken to be the row its `id` names
   when its frame and photons equal that row's. The fields are written only when every emitter is
   such a row; for combined localizations (frame connection's combined output), changed frames or
   photons, or emitters joined from another file, they are dropped with a warning. Emitters from

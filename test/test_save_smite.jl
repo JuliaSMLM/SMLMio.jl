@@ -760,8 +760,27 @@ end
         a, b = @test_logs (:warn, r"Z, Z_SE not saved") twice(
             "mdzbad.mat", Dict{String,Any}("Z" => Any["bad", 2.0], "Z_SE" => [0.1, 0.2]))
         @test !haskey(a, "Z") && !haskey(b, "Z") && a["NDims"] == b["NDims"] == 2
-        @test_throws r"Z of emitter 1 is 9007199254740993" save_smite(
+        @test_throws r"Z of metadata row 1 is 9007199254740993" save_smite(
             sm([e2, e2]; md=Dict{String,Any}("Z" => Int64[2^53 + 1, 1], "Z_SE" => [0.1, 0.2])), dir, "mdzbig.mat")
+        # Data whose emitters' ids are rows of the metadata's Z (SMLMData 0.7.1 set id to the file
+        # row and kept a 3D file's Z in file order): each emitter gets its own row's z, after a
+        # reordering or a localization dropped by the complex screening alike
+        f(fr, id) = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=fr, id=id)
+        zmd() = Dict{String,Any}("Z" => [0.25, 0.5, 0.75], "Z_SE" => [0.1, 0.2, 0.3])
+        for (es, z, σz) in (([f(3, 3), f(1, 1)], [0.75, 0.25], [0.3, 0.1]),
+                            ([f(1, 1), f(3, 3)], [0.25, 0.75], [0.1, 0.3]),
+                            ([f(2, 2), f(1, 1), f(3, 3)], [0.5, 0.25, 0.75], [0.2, 0.1, 0.3]))
+            save_smite(sm(es; md=zmd()), dir, "byid.mat")
+            back = load_smite_3d(SmiteSMD(dir, "byid.mat"))
+            @test [e.frame for e in back.emitters] == [e.frame for e in es]
+            @test [e.z for e in back.emitters] == z && [e.σ_z for e in back.emitters] ≈ σz
+        end
+        # Ids that are not rows of a Z with as many values as emitters: not taken for coordinates,
+        # dropped with a warning (a load would take them for each emitter's)
+        @test_logs (:warn, r"Z, Z_SE not saved: their values cannot be matched") save_smite(
+            sm([f(1, 5), f(2, 6)]; md=Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2])), dir, "noid.mat")
+        smd = matread(joinpath(dir, "noid.mat"))["SMD"]
+        @test !haskey(smd, "Z") && smd["NDims"] == 2
         # Metadata Z of another length is ordinary metadata, written as given; the file stays 2D
         save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => [1.0, 2.0, 3.0])), dir, "mdz3rows.mat")
         smd = matread(joinpath(dir, "mdz3rows.mat"))["SMD"]

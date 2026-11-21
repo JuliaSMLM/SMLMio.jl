@@ -56,8 +56,10 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   `Float32` edges that round onto each other). 3D
   data whose `z` mixes `Float32` and `Float64`, or is `Float16`, save their `Z` instead of
   dropping it. `Z` and `Z_SE` kept in the metadata by `load_smite_2d` are written the same way
-  for 2D emitters, as are metadata `Z` and `Z_SE` with one value per emitter on data not loaded
-  by SMLMio (built by hand, or loaded by SMLMData 0.7.1), so a save and a save of its load agree;
+  for 2D emitters, as are metadata `Z` and `Z_SE` on data not loaded by SMLMio (built by hand,
+  or loaded by SMLMData 0.7.1) when they can be matched to the emitters, by each emitter's `id`
+  (SMLMData 0.7.1 set it to the file row) or in order when no emitter has one, so a save and a
+  save of its load agree, and each `z` stays with its localization;
   the file says `NDims` 3 when both are written and it has localizations, its `Z` had values
   (SMITE writes `NDims` 2 for its 3D fits) or the metadata's `NDims` is 3. Every other
   per-localization field keeps its MATLAB class (SMITE's `IndSMD` stays a cell).
