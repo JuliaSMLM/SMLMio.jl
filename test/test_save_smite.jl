@@ -29,6 +29,18 @@ struct OddZLoc{Z,S} <: SMLMCore.AbstractEmitter
 end
 _oddz(z, σz) = OddZLoc(1.0, 1.5, z, 1000.0, 10.0, 0.01, 0.01, σz, 50.0, 2.0, 1, 1, 0, 1)
 
+# A 2D fit emitter whose fields may be any number type, and an SMLD whose counts may be.
+struct AnyNumLoc <: SMLMCore.AbstractEmitter
+    x::Any; y::Any; photons::Any; bg::Any; σ_x::Any; σ_y::Any; σ_photons::Any; σ_bg::Any
+    frame::Any; dataset::Any; track_id::Any; id::Int
+end
+_anyloc(; x=1.0, photons=1000.0, bg=10.0, frame=1, dataset=1, track_id=0) =
+    AnyNumLoc(x, 1.5, photons, bg, 0.01, 0.01, 50.0, 2.0, frame, dataset, track_id, 1)
+struct AnyCountSMLD{E} <: SMLMCore.AbstractSMLD
+    emitters::Vector{E}; camera::SMLMCore.AbstractCamera; n_frames::Any; n_datasets::Any
+    metadata::Dict{String,Any}
+end
+
 # Mimics SykTrack's Localization: position in a tuple, x/y/z computed in getproperty,
 # :z listed in propertynames only for N >= 3. No emitter_ndims method of its own.
 struct PropZLoc{N,T} <: SMLMCore.AbstractEmitter
@@ -542,32 +554,55 @@ end
     @test occursin("/a/b/c", sprint(show, MIME("text/plain"), smd))
 end
 
-@testset "save_smite writes counts and indices exactly, or refuses" begin
+@testset "save_smite applies the loaders' rule to counts and indices" begin
     cam = IdealCamera(1:64, 1:64, 0.1)
-    big = 2^53 + 1                    # the first whole number a double cannot hold
-    em(; kw...) = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; kw...)
+    two53 = Int64(2)^53
+    big = two53 + 1                   # the first whole number a double cannot hold
+    sm(es, nf, nd) = AnyCountSMLD(es, cam, nf, nd, Dict{String,Any}())
+    a = _anyloc()
     mktempdir() do dir
-        # 2^53 itself is a double: written and read back exactly
-        smld = SMLMCore.BasicSMLD([em(frame=2^53, track_id=2^53)], cam, 2^53, 1)
-        save_smite(smld, dir, "edge.mat")
-        back = load_smite_2d(SmiteSMD(dir, "edge.mat"))
-        @test back.n_frames == 2^53 && back.emitters[1].frame == 2^53 && back.emitters[1].track_id == 2^53
-        # One above is an ArgumentError naming the field and the emitter; no file is written
+        # What it writes loads: n_frames 0 ("unknown") and n_datasets 0 included
+        for (nf, nd) in ((0, 0), (0, 3), (5, 0))
+            save_smite(SMLMCore.BasicSMLD([Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)],
+                                          cam, nf, nd), dir, "zero.mat")
+            back = load_smite_2d(SmiteSMD(dir, "zero.mat"))
+            @test back.n_frames == nf && back.n_datasets == nd
+        end
+        # Whole numbers a double holds exactly, of any number type, write and load back exactly
+        # (2^53 + 2 is such a double)
+        if Sys.WORD_SIZE == 64
+            save_smite(sm([_anyloc(frame=two53, dataset=UInt64(5), track_id=two53 + 2)], two53 + 2, 7 // 1),
+                       dir, "edge.mat")
+            back = load_smite_2d(SmiteSMD(dir, "edge.mat"))
+            @test back.n_frames == two53 + 2 && back.n_datasets == 7
+            e = back.emitters[1]
+            @test e.frame == two53 && e.dataset == 5 && e.track_id == two53 + 2
+        end
+        # Anything the loaders would refuse or read back differently is an ArgumentError naming
+        # the value; nothing is written
         for (name, smld, msg) in (
-                ("nf.mat", SMLMCore.BasicSMLD([em()], cam, big, 1), "n_frames $big"),
-                ("nd.mat", SMLMCore.BasicSMLD([em()], cam, 1, big), "n_datasets $big"),
-                ("fr.mat", SMLMCore.BasicSMLD([em(), em(frame=big)], cam, 1, 1), "frame of emitter 2 $big"),
-                ("ds.mat", SMLMCore.BasicSMLD([em(dataset=big)], cam, 1, 1), "dataset of emitter 1 $big"),
-                ("tr.mat", SMLMCore.BasicSMLD([em(), em(), em(track_id=-big)], cam, 1, 1), "track_id of emitter 3 -$big"))
+                ("nf.mat", sm([a], big, 1), "n_frames is $big"),
+                ("nfr.mat", sm([a], (big)//1, 1), "n_frames is $(repr(big//1))"),
+                ("nfu.mat", sm([a], UInt64(1) << 63, 1), "n_frames is $(repr(UInt64(1) << 63))"),
+                ("nfneg.mat", sm([a], -1, 1), "n_frames is -1; SMITE stores it as a MATLAB double, so it must be a whole number of at least 0"),
+                ("nfh.mat", sm([a], 2.5, 1), "n_frames is 2.5"),
+                ("nd.mat", sm([a], 1, big), "n_datasets is $big"),
+                ("ndneg.mat", sm([a], 1, -2), "n_datasets is -2"),
+                ("fr.mat", sm([a, _anyloc(frame=big)], 1, 1), "frame of emitter 2 is $big"),
+                ("frh.mat", sm([a, a, _anyloc(frame=2.5)], 1, 1), "frame of emitter 3 is 2.5"),
+                ("ds.mat", sm([_anyloc(dataset=big)], 1, 1), "dataset of emitter 1 is $big"),
+                ("dsu.mat", sm([_anyloc(dataset=typemax(UInt64))], 1, 1), "dataset of emitter 1 is $(repr(typemax(UInt64)))"),
+                ("tr.mat", sm([a, a, _anyloc(track_id=-big)], 1, 1), "track_id of emitter 3 is -$big"),
+                ("trm.mat", sm([_anyloc(track_id=missing)], 1, 1), "track_id of emitter 1 is missing"))
             err = try save_smite(smld, dir, name); nothing catch ex; ex end
             @test err isa ArgumentError
             err isa ArgumentError && @test occursin(msg, err.msg) && occursin("MATLAB double", err.msg)
             @test !isfile(joinpath(dir, name))
         end
         # An existing file is left as it was
-        save_smite(SMLMCore.BasicSMLD([em()], cam, 1, 1), dir, "keep.mat")
+        save_smite(sm([a], 1, 1), dir, "keep.mat")
         before = read(joinpath(dir, "keep.mat"))
-        @test_throws ArgumentError save_smite(SMLMCore.BasicSMLD([em()], cam, big, 1), dir, "keep.mat")
+        @test_throws ArgumentError save_smite(sm([a], big, 1), dir, "keep.mat")
         @test read(joinpath(dir, "keep.mat")) == before
     end
 end

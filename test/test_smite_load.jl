@@ -692,29 +692,36 @@ end
         s = smite_smd(3); s["NFrames"] = ComplexF64(100, 0)
         @test ld("nfc0.mat", s).n_frames == 100
 
-        # Counts and frames load exactly, with no rounding through Float64
-        big = 2^53 + 1
-        s = smite_smd(3); s["NFrames"] = big; s["FrameNum"] = col([1, 2, big])
-        smld = ld("big.mat", s)
-        @test smld.n_frames == big
-        @test smld.emitters[3].frame == big
-        @test smld.metadata["smite_row_frames"][3] == big
+        # Counts and frames load exactly, with no rounding through Float64 (an Int must hold them)
+        if Sys.WORD_SIZE == 64
+            big = Int64(2)^53 + 1
+            s = smite_smd(3); s["NFrames"] = big; s["FrameNum"] = col(Int64[1, 2, big])
+            smld = ld("big.mat", s)
+            @test smld.n_frames == big
+            @test smld.emitters[3].frame == big
+            @test smld.metadata["smite_row_frames"][3] == big
+        end
 
-        # A complex value, a value that is not a number, several values, a size or count below 1,
-        # or a pixel size that is not finite: an ArgumentError naming the field, nothing loaded
-        for (key, v, msg) in (("NFrames", 1.0 + 2.0im, "NFrames must be a whole number of at least 1"),
+        # NFrames 0 ("unknown" in the lab's packages) and NDatasets 0 load, as in 0.1.0
+        s = smite_smd(3); s["NFrames"] = 0.0; s["NDatasets"] = 0.0
+        smld = ld("zero_counts.mat", s)
+        @test smld.n_frames == 0 && smld.n_datasets == 0
+
+        # A complex value, a value that is not a number, several values, an image size below 1,
+        # a count below 0, or a pixel size that is not finite: an ArgumentError naming the field
+        for (key, v, msg) in (("NFrames", 1.0 + 2.0im, "NFrames must be a whole number of at least 0"),
                               ("NDatasets", 1.0 + 1.0im, "NDatasets must be a whole number"),
                               ("XSize", 64.0 + 0.5im, "XSize must be a whole number"),
                               ("PixelSize", 0.1 + 0.2im, "PixelSize 0.1 + 0.2im is not a real number"),
                               ("XSize", "64", "XSize is not a number"),
                               ("PixelSize", "0.1", "PixelSize is not a number"),
                               ("NFrames", Any["100"], "NFrames is not a number"),
-                              ("PixelSize", col([0.1, 0.1]), "PixelSize holds 2 values"),
+                              ("PixelSize", col([0.1, 0.1]), "PixelSize holds 2 values; SMLMio loads files with one PixelSize (SMITE's catSMD"),
                               ("YSize", col([64.0, 64.0]), "YSize holds 2 values"),
                               ("XSize", 0.0, "XSize must be a whole number of at least 1, but is 0.0"),
                               ("YSize", -3.0, "YSize must be a whole number of at least 1"),
-                              ("NFrames", 0.0, "NFrames must be a whole number of at least 1"),
-                              ("NDatasets", -1.0, "NDatasets must be a whole number of at least 1"),
+                              ("NFrames", -1.0, "NFrames must be a whole number of at least 0"),
+                              ("NDatasets", -1.0, "NDatasets must be a whole number of at least 0"),
                               ("XSize", 1e300, "XSize must be a whole number"),
                               ("PixelSize", Inf, "PixelSize Inf is not finite"),
                               ("PixelSize", NaN, "PixelSize NaN is not finite"))
@@ -729,10 +736,27 @@ end
         # The pixel_size keyword is checked the same way
         @test_throws r"pixel_size is not a number" ld("pxkwtext.mat", nopx; pixel_size="0.1")
         @test_throws r"pixel_size Inf is not finite" ld("pxkwinf.mat", nopx; pixel_size=Inf)
-        # ZSize, which SMITE does not write, may be 0 as before; 3D only
+        # ZSize, which SMITE does not write: in 3D one number is appended to data_size, a whole
+        # number of at least 0; several values or text are kept in the metadata only, as in
+        # 0.1.0. Every ZSize stays in the metadata.
+        ld3(name, s) = load_smite_3d(write_smd(dir, name, s))
         s3 = smite_smd_3d(3); s3["ZSize"] = 0.0
-        @test load_smite_3d(write_smd(dir, "zs0.mat", s3)).metadata["data_size"] == [64, 64, 0]
+        @test ld3("zs0.mat", s3).metadata["data_size"] == [64, 64, 0]
+        s3 = smite_smd_3d(3); s3["ZSize"] = 11.0
+        smld = ld3("zs11.mat", s3)
+        @test smld.metadata["data_size"] == [64, 64, 11] && smld.metadata["ZSize"] == 11
+        for v in (col([5.0, 6.0]), "text")
+            s3 = smite_smd_3d(3); s3["ZSize"] = v
+            smld = ld3("zsodd.mat", s3)
+            @test smld.metadata["data_size"] == [64, 64] && smld.metadata["ZSize"] == v
+        end
+        s3 = smite_smd_3d(3); s3["ZSize"] = -2.0
+        @test_throws r"ZSize must be a whole number of at least 0" ld3("zsneg.mat", s3)
         s = smite_smd(3); s["ZSize"] = "not read in 2D"
         @test ld("zs2d.mat", s).metadata["ZSize"] == "not read in 2D"
+        # A 3D round trip keeps ZSize
+        s3 = smite_smd_3d(3); s3["ZSize"] = 11.0
+        save_smite(ld3("zsrt.mat", s3), dir, "zsrt-saved.mat")
+        @test load_smite_3d(SmiteSMD(dir, "zsrt-saved.mat")).metadata["data_size"] == [64, 64, 11]
     end
 end

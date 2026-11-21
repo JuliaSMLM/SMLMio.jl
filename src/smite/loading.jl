@@ -39,7 +39,9 @@ function _smite_scalar(where, s, key)
     k = _smite_length(v)
     k == 0 && return nothing
     k == 1 && first(v) isa Number && return first(v)
-    throw(ArgumentError(k > 1 ? "$where: $key holds $k values; SMLMio loads files with one" :
+    throw(ArgumentError(k > 1 ? "$where: $key holds $k values; SMLMio loads files with one $key " *
+                                "(SMITE's catSMD stores a list of a field that differs between the " *
+                                "datasets it joins, such as NFrames when they differ in length)" :
                                 "$where: $key is not a number"))
 end
 
@@ -139,18 +141,13 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     (xsize === nothing || ysize === nothing) && throw(ArgumentError(
         "$where has no image size (XSize, YSize absent or empty; $n localizations), so its camera " *
         "cannot be built"))
-    # SMITE's catSMD joins NFrames into a list when the joined datasets differ in length
-    for key in ("NFrames", "NDatasets")
-        k = _smite_length(get(s, key, nothing))
-        k > 1 && throw(ArgumentError("$where: $key holds $k values; SMLMio loads files with one " *
-            "$key (SMITE's catSMD stores a list of NFrames when the datasets it joins differ in length)"))
-    end
     nframes = _smite_scalar(where, s, "NFrames")
     ndatasets = _smite_scalar(where, s, "NDatasets")
     (nframes === nothing || ndatasets === nothing) && throw(ArgumentError(
         "$where has no NFrames or NDatasets"))
     xsize, ysize = _smite_count(where, "XSize", xsize), _smite_count(where, "YSize", ysize)
-    nframes, ndatasets = _smite_count(where, "NFrames", nframes), _smite_count(where, "NDatasets", ndatasets)
+    nframes = _smite_count(where, "NFrames", nframes, _SMITE_COUNT_MIN["NFrames"])
+    ndatasets = _smite_count(where, "NDatasets", ndatasets, _SMITE_COUNT_MIN["NDatasets"])
     camera = IdealCamera(1:xsize, 1:ysize, px)
 
     # Screen complex values in the per-localization columns read from the file
@@ -197,12 +194,14 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
 
     # Metadata
     data_size = [ysize, xsize]
-    # SMITE's SMD has no ZSize; load_smite_3d keeps one when a file has it
-    zsize = three_d ? _smite_scalar(where, s, "ZSize") : nothing
-    zsize !== nothing && push!(data_size, _smite_count(where, "ZSize", zsize, 0))
+    # SMITE's SMD has no ZSize. load_smite_3d appends one number to data_size (a whole number of
+    # at least 0); a ZSize of several values or text is only kept in the metadata, as is every
+    # ZSize, so that save_smite writes it back.
+    zsize = get(s, "ZSize", nothing)
+    three_d && _smite_length(zsize) == 1 && first(zsize) isa Number &&
+        push!(data_size, _smite_count(where, "ZSize", first(zsize), 0))
     # Every other SMITE field, and the raw value of an optional field loaded as its default
-    used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"],
-                    three_d ? ["ZSize"] : String[]))
+    used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"]))
     setdiff!(used, defaulted)
     metadata = Dict{String,Any}(k => v for (k, v) in s if !(k in used || k in _SMITE_LOADER_KEYS))
     # SMITE's per-localization fields among them, with one value per file row: save_smite writes
@@ -228,9 +227,15 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
 end
 
 # SMITE stores counts and indices as doubles; one becomes an Int only when it is a whole number
-# an Int holds, compared exactly (no rounding through Float64).
-_is_whole(x) = x isa Number && iszero(imag(x)) && isinteger(real(x))
-_fits_int(x) = _is_whole(x) && typemin(Int) <= real(x) <= typemax(Int)
+# an Int holds, compared exactly (no rounding through Float64). A complex value counts when its
+# imaginary part is zero.
+_fits_int(x) = x isa Number && iszero(imag(x)) && isinteger(real(x)) &&
+               typemin(Int) <= real(x) <= typemax(Int)
+
+# Lower bounds of the counts, which save_smite applies too, so that every file it writes loads.
+# An image needs a pixel; n_frames 0 means "unknown" in the lab's packages (frame connection,
+# trajectories), and n_datasets 0 an SMLD without datasets.
+const _SMITE_COUNT_MIN = Dict("XSize" => 1, "YSize" => 1, "NFrames" => 0, "NDatasets" => 0)
 
 # An image size or count as an Int: a whole number of at least `lo`.
 function _smite_count(where, key, v, lo=1)
@@ -268,8 +273,8 @@ the loaders treat empty and per-dataset fields, and what is kept in the metadata
 - Throws an `ArgumentError` when the file has no pixel size and none is passed, no image size
   (`XSize`, `YSize`; SMITE leaves them empty in a result without localizations), no `NFrames` or
   `NDatasets` or several of them, or a required field (`X`, `Y`, `Photons`, `Bg`, `X_SE`,
-  `Y_SE`, `FrameNum`) without one value per localization; when `XSize`, `YSize`, `NFrames`
-  or `NDatasets` is not one whole number of at least 1, or `FrameNum`, `DatasetNum` or
+  `Y_SE`, `FrameNum`) without one value per localization; when `XSize` or `YSize` is not one
+  whole number of at least 1, `NFrames` or `NDatasets` not one of at least 0, `FrameNum`, `DatasetNum` or
   `ConnectID` holds a value that is not a whole number in `Int`'s range (`DatasetNum` and
   `ConnectID` in the loaded rows); and when the pixel size (the file's or `pixel_size`) is
   not a positive, finite real number.

@@ -103,13 +103,13 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     
     # Counts and indices are doubles, as most SMITE results files hold them (MATLAB integer arithmetic
     # rounds); one a double cannot hold exactly is an error, not a rounded value
-    s["FrameNum"] = _mat_doubles("frame", [e.frame for e in smld.emitters])
-    s["DatasetNum"] = _mat_doubles("dataset", [e.dataset for e in smld.emitters])
-    s["ConnectID"] = _mat_doubles("track_id", [e.track_id for e in smld.emitters])
+    s["FrameNum"] = _mat_counts("frame", [e.frame for e in smld.emitters])
+    s["DatasetNum"] = _mat_counts("dataset", [e.dataset for e in smld.emitters])
+    s["ConnectID"] = _mat_counts("track_id", [e.track_id for e in smld.emitters])
 
     # Add metadata: what the loaders need to read the file back, from the camera
-    s["NFrames"] = _mat_double("n_frames", smld.n_frames)
-    s["NDatasets"] = _mat_double("n_datasets", smld.n_datasets)
+    s["NFrames"] = _mat_count("n_frames", smld.n_frames, _SMITE_COUNT_MIN["NFrames"])
+    s["NDatasets"] = _mat_count("n_datasets", smld.n_datasets, _SMITE_COUNT_MIN["NDatasets"])
     s["XSize"] = Float64(length(ex) - 1)
     s["YSize"] = Float64(length(ey) - 1)
     s["PixelSize"] = Float64(px)
@@ -324,18 +324,23 @@ function _same_float(col, f, emitters)
     return T in (Float32, Float64) ? convert(Vector{T}, vals) : _mat_column(vals)
 end
 
-# A count or index as a MATLAB double. A double holds every whole number only up to 2^53, so an
-# integer it cannot hold exactly is an ArgumentError rather than a silently rounded value.
-function _mat_double(what, v)
-    d = Float64(v)
-    v isa Integer && d != v && _inexact_double(what, v)
-    return d
+# A count or index as a MATLAB double, by the loaders' rule (_fits_int, _SMITE_COUNT_MIN) so that
+# every file save_smite writes loads: a whole number in Int's range, at least `lo`, that a double
+# holds exactly (every whole number up to 2^53, and some above). Anything else is an
+# ArgumentError naming the value, before anything is written.
+function _mat_count(what, v, lo=typemin(Int))
+    _mat_count_ok(v, lo) || _bad_count(what, v, lo)
+    return Float64(real(v))
 end
-function _mat_doubles(what, vals)
-    out = Float64[Float64(v) for v in vals]
-    bad = findfirst(i -> vals[i] isa Integer && out[i] != vals[i], eachindex(vals))
-    bad === nothing || _inexact_double("$what of emitter $bad", vals[bad])
-    return out
+function _mat_counts(what, vals)
+    bad = findfirst(v -> !_mat_count_ok(v, typemin(Int)), vals)
+    bad === nothing || _bad_count("$what of emitter $bad", vals[bad], typemin(Int))
+    return Float64[Float64(real(v)) for v in vals]
 end
-_inexact_double(what, v) = throw(ArgumentError("save_smite: $what $v cannot be stored exactly as " *
-    "a MATLAB double (SMITE stores counts and indices as doubles, exact up to 2^53); nothing was written"))
+_mat_count_ok(v, lo) = _fits_int(v) && real(v) >= lo && Float64(real(v)) == real(v)
+function _bad_count(what, v, lo)
+    bound = lo == typemin(Int) ? "" : " of at least $lo"
+    throw(ArgumentError("save_smite: $what is $(repr(v)); SMITE stores it as a MATLAB double, so " *
+        "it must be a whole number$bound in Int's range that a double holds exactly (every whole " *
+        "number up to 2^53); nothing was written"))
+end

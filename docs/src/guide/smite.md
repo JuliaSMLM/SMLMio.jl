@@ -50,8 +50,9 @@ photons. To edit or replace a listed field, keep one value per file row, in file
 `save_smite` writes it by row. Some older SMITE files hold such a field with one value per
 dataset; in a file with as many localizations as datasets that cannot be told apart.
 
-`n_frames` is SMITE's `NFrames`, the number of frames per dataset, and `frame` runs from 1 to
-`n_frames` in each dataset. `n_datasets` is `NDatasets`.
+`n_frames` is SMITE's `NFrames`, the number of frames per dataset, and in SMITE's convention
+`frame` runs from 1 to `n_frames` in each dataset; the loaders do not check frames against it.
+`n_datasets` is `NDatasets`. An `n_frames` of 0 means "unknown" in the lab's packages.
 
 What the loaders do with fields SMITE leaves empty or writes in another shape:
 
@@ -62,9 +63,11 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   `PixelSize` (or a `Float32` `pixel_size`) gives an `IdealCamera{Float32}`, a double an
   `IdealCamera{Float64}`; another real number becomes a `Float64`. The emitters are
   `Float64` either way. A pixel size that is complex, not finite or not positive is an error.
-- **Sizes and counts.** `XSize`, `YSize`, `NFrames` and `NDatasets` must each be one whole
-  number of at least 1, compared as stored (a count above 2^53 is not rounded). A complex
-  value, text, several values or a value below 1 is an error naming the field.
+- **Sizes and counts.** `XSize` and `YSize` must each be one whole number of at least 1, and
+  `NFrames` and `NDatasets` one whole number of at least 0, in `Int`'s range and compared as
+  stored, so a count above 2^53 is not rounded. A complex value with a non-zero imaginary part,
+  text, several values or a value below the bound is an error naming the field (a complex value
+  whose imaginary part is zero is its real part).
 - **Optional fields.** `Photons_SE` and `Bg_SE` load as `NaN`, `DatasetNum` as 1 and `ConnectID`
   as 0 when the file leaves them empty (SMITE leaves `ConnectID` empty before frame connection)
   or holds them with one value per dataset (some older SMITE versions). Their raw values stay in
@@ -76,11 +79,14 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   loader throws and names the field.
 - **No localizations.** SMITE leaves `XSize` and `YSize` empty in a result without
   localizations, so no camera can be built and the loader throws, naming the missing image size.
-- **One `NFrames`.** When the datasets it joins differ in length, SMITE's `catSMD` stores a list
-  of `NFrames`; the loaders throw, saying how many values the file holds.
-- **3D.** SMITE's SMD has no `ZSize`. When a file has one, `load_smite_3d` appends it to
-  `data_size`; `load_smite_2d` keeps it in the metadata. `load_smite_2d` on a file with `NDims`
-  3 warns that it leaves `Z` out (kept in the metadata).
+- **One value each.** SMITE's `catSMD` stores a list for a field that differs between the
+  datasets it joins, such as `NFrames` when they differ in length. The loaders throw for a
+  `PixelSize`, `XSize`, `YSize`, `NFrames` or `NDatasets` of several values, saying how many the
+  file holds; a `pixel_size` passed to the loader does not stand in for such a `PixelSize`.
+- **3D.** SMITE's SMD has no `ZSize`. Every `ZSize` stays in the metadata, so `save_smite` writes
+  it back. When it is one number, `load_smite_3d` also appends it to `data_size`; it must then be
+  a whole number of at least 0. A `ZSize` of several values or text is only kept in the metadata.
+  `load_smite_2d` on a file with `NDims` 3 warns that it leaves `Z` out (kept in the metadata).
 - **Rows or columns.** An SMD built by hand in MATLAB with row vectors loads like SMITE's
   columns.
 - **Cells of numbers.** A per-localization field stored as a MATLAB cell of numbers (single
@@ -131,10 +137,12 @@ again once the cause is fixed. It contains:
   mixed 2D/3D data save without `Z`, with a warning: an SMD has one `Z` column for all
   localizations, so save 2D and 3D data separately to keep it.
 - `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
-  and indices as doubles, as most SMITE results files hold them. A double holds every whole
-  number only up to 2^53, so a larger `n_frames`, `n_datasets`, `frame`, `dataset` or
-  `track_id` is an `ArgumentError` naming it, and nothing is written. SMITE has one pixel size,
-  so a camera whose pixels are not uniform and square is an error.
+  and indices as doubles, as most SMITE results files hold them. They follow the loaders' rule,
+  so every file `save_smite` writes loads: `n_frames` and `n_datasets` must be whole numbers of
+  at least 0, and each emitter's `frame`, `dataset` and `track_id` whole numbers, each in
+  `Int`'s range and held exactly by a double (every whole number up to 2^53, and some above).
+  Any other value is an `ArgumentError` naming it, and nothing is written. SMITE has one pixel
+  size, so a camera whose pixels are not uniform and square is an error.
 - every metadata entry that is not an emitter column, except the loaders' own: `original_file`,
   `data_size`, `pixel_size`, `smite_defaulted_fields`, `smite_per_localization_fields`,
   `smite_row_frames`, `smite_row_photons`, `complex_fields_removed`, `complex_fields`,

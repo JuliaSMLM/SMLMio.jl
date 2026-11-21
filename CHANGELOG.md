@@ -7,14 +7,20 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 - Scalar fields were converted to `Float64` before they were checked. A complex `NFrames`,
   `NDatasets`, `XSize`, `YSize` or `PixelSize` loaded as its real part, counts above 2^53 were
   rounded, and a MATLAB single `PixelSize` gave an `IdealCamera{Float64}` (SMLMData 0.7.1 gave
-  an `IdealCamera{Float32}`). Each is now checked as stored: the camera keeps the pixel size's
-  floating-point type, counts load exactly, and a complex value, text, several values, an image
-  size or count below 1 (which loaded a camera with no pixels, or no frames) or a pixel size
-  that is not finite is an `ArgumentError` naming the field. A `FrameNum`, `DatasetNum` or
-  `ConnectID` value too large for an `Int` is an `ArgumentError`, not an `InexactError`.
+  an `IdealCamera{Float32}`). Each is now checked as stored, and counts load exactly. `XSize`
+  and `YSize` must be whole numbers of at least 1 (0 or below loaded a camera with no pixels),
+  `NFrames` and `NDatasets` whole numbers of at least 0; a value with a non-zero imaginary part,
+  text or several values is an `ArgumentError` naming the field, and a `pixel_size` passed to
+  the loader no longer stands in for a `PixelSize` of several values or text. A `FrameNum`,
+  `DatasetNum` or `ConnectID` value too large for an `Int` is an `ArgumentError`, not an
+  `InexactError`. In 3D, `ZSize` now stays in the metadata, so a save and load keeps it; when it
+  is one number it must be a whole number of at least 0.
 - `save_smite` wrote `n_frames`, `n_datasets` and each emitter's `frame`, `dataset` and
-  `track_id` as doubles without checking them, so a value above 2^53 was saved rounded. Such a
-  value is now an `ArgumentError` naming it, and nothing is written.
+  `track_id` as doubles without checking them, so a value a double cannot hold exactly was saved
+  rounded, and values the loaders refuse (a negative `n_frames`, a frame of 2.5) were written.
+  They now follow the loaders' rule: whole numbers in `Int`'s range that a double holds exactly,
+  with `n_frames` and `n_datasets` at least 0. Any other value is an `ArgumentError` naming it,
+  and nothing is written.
 - The loaders refused a per-localization field stored as a MATLAB cell of numbers (MAT reads it
   as an array of `Any`), which SMLMData 0.7.1 loaded: "Photons is not numeric". Such a field
   now loads as a numeric column. An optional field (`Photons_SE`, `Bg_SE`, `DatasetNum`,
