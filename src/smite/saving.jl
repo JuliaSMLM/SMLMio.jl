@@ -51,25 +51,22 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s = Dict{String,Any}()
 
     # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose every emitter has
-    # z and σ_z, when every z and σ_z is a real number a double holds exactly (_mat_floats).
-    # Anything else saves without Z; non-empty 3D or mixed data that lose Z get a warning.
+    # z and σ_z, written by _z_columns. Anything else saves without Z; non-empty 3D or mixed data
+    # that lose Z get a warning.
     d = emitter_ndims(smld.emitters)
+    n = length(smld.emitters)
     zcols = nothing
-    if eltype(smld.emitters) <: Emitter3DFit || (d == 3 && !isempty(smld.emitters) &&
+    if eltype(smld.emitters) <: Emitter3DFit || (d == 3 && n > 0 &&
            all(e -> hasproperty(e, :z) && hasproperty(e, :σ_z), smld.emitters))
-        zv, σzv = [e.z for e in smld.emitters], [e.σ_z for e in smld.emitters]
-        z, σz = _mat_floats(zv), _mat_floats(σzv)
-        # A real z or σ_z a double would round is an error naming the emitter; z that are not
-        # real numbers (missing) save without Z, with the warning below, as before
-        for (name, vals, r) in (("z", zv, z), ("σ_z", σzv, σz))
-            r isa Integer && _is_real(vals[r]) && _mat_column(name, vals)
-        end
-        z isa Integer || σz isa Integer || (zcols = (z, σz))
+        zcols = _z_columns(("z", "σ_z"), ([e.z for e in smld.emitters], [e.σ_z for e in smld.emitters]),
+                           "emitter", 1:n)
     end
-    if zcols === nothing && !isempty(smld.emitters)
+    # The emitters' own Z was not saved: metadata Z and Z_SE, below, must not stand in for it
+    lostz = zcols === nothing && n > 0 && d !== 2
+    if lostz
         d === nothing && @warn("save_smite: mixed 2D/3D emitters: Z not saved; " *
                                "save 2D and 3D data separately")
-        d == 3 && @warn("save_smite: 3D emitters whose z or σ_z are not all real numbers: Z not saved")
+        d == 3 && @warn("save_smite: 3D emitters whose z or σ_z are not all numbers: Z not saved")
     end
     
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
@@ -171,6 +168,23 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         end
     end
 
+    # Z and Z_SE that load_smite_2d kept from a 3D file, listed with one value per file row, are
+    # written for these 2D emitters' rows through the same writer as the emitters' z, both or
+    # neither (a value that is not a number drops them with a warning); the file then says NDims 3
+    # when both are written and it has localizations or its NDims was 3. When the emitters' own Z
+    # was not saved (lostz), metadata Z and Z_SE are not saved at all.
+    zkeys = zcols === nothing && !lostz ? filter(k -> k in towrite, ["Z", "Z_SE"]) : String[]
+    mdz = Dict{String,Any}()
+    if !isempty(zkeys)
+        conv = _z_columns(zkeys, [_smite_vec(md[k])[rows] for k in zkeys], "file row", rows)
+        if conv === nothing
+            @warn("save_smite: $(join(zkeys, ", ")) not saved: they hold values that are not numbers")
+        else
+            foreach((k, c) -> mdz[k] = c, zkeys, conv)
+        end
+    end
+    ndims3_from_md = length(mdz) == 2 && (n > 0 || _is_ndims3(get(md, "NDims", nothing)))
+
     # Add any additional fields from metadata, except the loaders' own entries. For data loaded
     # from SMITE, a field SMITE stacks per localization that is not listed as one value per file
     # row (the file held it otherwise, often one value per dataset, or it was added after loading)
@@ -181,20 +195,15 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     ambiguous = String[]
     for (key, value) in md
         (key in _SMITE_LOADER_KEYS || haskey(s, key)) && continue
+        if key in ("Z", "Z_SE") && (lostz || key in zkeys)
+            haskey(mdz, key) && (s[key] = mdz[key])
+            continue
+        end
         if key in perloc
             key in towrite || continue
+            # Every other field keeps its MATLAB class: SMITE's IndSMD is a cell, one entry per
+            # localization, and ThreshFlag is uint32
             value = _smite_vec(value)[rows]
-            # Z and Z_SE (kept by load_smite_2d from a 3D file) are coordinates the loaders read as
-            # numbers: written as a number column (a cell of them, as 0.1.0 could write, included),
-            # exactly or not at all. Every other field keeps its MATLAB class: SMITE's IndSMD is a
-            # cell, one entry per localization, and ThreshFlag is uint32.
-            if key in ("Z", "Z_SE")
-                v = _mat_floats(value)
-                v isa Integer && throw(ArgumentError("save_smite: $key of file row $(rows[v]) is " *
-                    "$(repr(value[v])), which is not a real number a MATLAB double holds exactly; " *
-                    "nothing was written"))
-                value = v
-            end
         elseif loaded && key in _SMITE_STACKABLE && nsaved > 0 && _smite_length(value) == nsaved
             push!(ambiguous, key)
             continue
@@ -205,11 +214,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         "per localization, they are not listed in smite_per_localization_fields as one value per file " *
         "row, and with as many values as saved localizations a load would take them for one value per " *
         "localization; list a field there, with one value per file row, to save it by row")
-    # A 3D file loaded as 2D keeps Z and Z_SE in metadata, written back above for each emitter: say
-    # 3D when both are there with one value per localization, as load_smite_3d needs
-    zcols === nothing && !isempty(smld.emitters) &&
-        all(k -> haskey(s, k) && _smite_length(s[k]) == length(smld.emitters), ("Z", "Z_SE")) &&
-        (s["NDims"] = 3.0)
+    ndims3_from_md && (s["NDims"] = 3.0)
     
     # MAT truncates the target before it checks a struct's keys. Check them all first; an
     # existing file is rewritten only once the new contents are complete.
@@ -327,36 +332,49 @@ function _collect_bad_keys!(bad, path, v::AbstractArray)
 end
 _collect_bad_keys!(bad, path, _) = nothing
 
-# A numeric column as MATLAB writes it: single when every value is Float32, otherwise double, each
-# value a real number (a complex one with a zero imaginary part is its real part).
-# The column is converted by its values, not its element type: MAT writes a vector whose element
-# type is not concrete (Float32 and Float64 emitters together, say) as a cell, which SMITE cannot
-# compute with, and refuses some types (Float16, BigFloat). Returns the converted vector, or the
-# index of the first value that is not a real number a double holds exactly.
-function _mat_floats(col)
+# A numeric column as MATLAB writes it, converted by its values: single when every value is
+# Float32; otherwise double when every value is a real number (a complex one with a zero imaginary
+# part is its real part), or complex double when some value has a non-zero imaginary part (SMITE's
+# fits can give such values, and the loaders screen them out). MAT writes a vector whose element
+# type is not concrete as a cell, which SMITE cannot compute with, and refuses some types (Float16,
+# BigFloat), hence the conversion. Every value must convert exactly: the result is the converted
+# vector, or (i, kind) for a value that cannot be written, kind :inexact for a number a double would
+# round (found wherever it is in the column) and otherwise :notnumber.
+function _mat_numbers(col)
     isempty(col) && return eltype(col) === Float32 ? Float32[] : Float64[]
     all(x -> x isa Float32, col) && return convert(Vector{Float32}, col)
-    out = Vector{Float64}(undef, length(col))
-    for (i, x) in enumerate(col)
-        _is_real(x) || return i
-        r = real(x)
-        d = Float64(r)
-        r isa Union{Float32,Float64} || isequal(d, r) || return i
-        out[i] = d
-    end
-    return out
+    bad = findfirst(x -> x isa Number && !_exact_double(x), col)
+    bad === nothing || return (bad, :inexact)
+    bad = findfirst(x -> !(x isa Number), col)
+    bad === nothing || return (bad, :notnumber)
+    all(_is_real, col) && return Float64[Float64(real(x)) for x in col]
+    return ComplexF64[ComplexF64(x) for x in col]
 end
+_exact_double(x) = x isa Union{Float32,Float64,ComplexF32,ComplexF64} || isequal(ComplexF64(x), x)
 # A real number: a Real, or a complex number whose imaginary part is zero
 _is_real(x) = x isa Number && iszero(imag(x))
 
 # The emitters' column `what`, or an ArgumentError naming the first emitter whose value cannot be
-# written so (a value that is not real, or one a double would round, such as a BigFloat or an
-# integer above 2^53), before anything is written.
+# written, before anything is written.
 function _mat_column(what, col)
-    r = _mat_floats(col)
-    r isa Integer && throw(ArgumentError("save_smite: $what of emitter $r is $(repr(col[r])), which " *
-        "is not a real number a MATLAB double holds exactly; nothing was written"))
+    r = _mat_numbers(col)
+    r isa Tuple && _unwritable(what, "emitter", r[1], col[r[1]])
     return r
+end
+_unwritable(what, unit, i, v) = throw(ArgumentError("save_smite: $what of $unit $i is $(repr(v)), " *
+    "which is not a number that a MATLAB double holds exactly (a complex double for a complex " *
+    "value); nothing was written"))
+
+# Z and Z_SE as written, for the emitters (unit "emitter") or for file rows kept in metadata
+# ("file row", `ids` the rows): each column through _mat_numbers. A number a double would round is
+# an ArgumentError naming the field and the emitter or row; a value that is not a number
+# (missing) gives nothing, and the file is saved without these columns.
+function _z_columns(names, cols, unit, ids)
+    conv = map(_mat_numbers, cols)
+    for (name, vals, r) in zip(names, cols, conv)
+        r isa Tuple && r[2] === :inexact && _unwritable(name, unit, ids[r[1]], vals[r[1]])
+    end
+    return any(r -> r isa Tuple, conv) ? nothing : collect(conv)
 end
 
 # A position column in SMITE's pixels: f of each emitter's value, computed in Float64 from the
@@ -365,7 +383,7 @@ end
 # ArgumentError naming the emitter.
 function _pixel_column(what, col, f)
     own = _mat_column(what, col)
-    vals = Float64[f(Float64(v)) for v in own]
+    vals = eltype(own) <: Complex ? ComplexF64[f(v) for v in own] : Float64[f(Float64(v)) for v in own]
     out = eltype(own) === Float32 ? Float32.(vals) : vals
     bad = findfirst(i -> isfinite(own[i]) && !isfinite(out[i]), eachindex(own))
     bad === nothing || throw(ArgumentError("save_smite: $what of emitter $bad is $(repr(col[bad])), " *

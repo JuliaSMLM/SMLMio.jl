@@ -628,14 +628,21 @@ end
         @test smd["Photons"] isa AbstractArray{Float64} && vec(smd["Photons"]) == [1000.0, 1200.0]
         @test smd["Bg"] isa AbstractArray{Float64} && vec(smd["Bg"]) == [2.5, 3.0]
         @test [e.photons for e in load_smite_2d(SmiteSMD(dir, "ints.mat")).emitters] == [1000.0, 1200.0]
-        # A value a double would round, or one that is not a real number, is an ArgumentError
+        # A complex value is written as a complex double column, as 0.1.0 wrote it; the loaders
+        # drop that localization, as they do for SMITE's complex fits
+        save_smite(sm([_anyloc(photons=1.0 + 1.0im), _anyloc(photons=900.0)]), dir, "pc.mat")
+        @test matread(joinpath(dir, "pc.mat"))["SMD"]["Photons"] isa AbstractArray{ComplexF64}
+        back = @test_logs (:warn, r"non-zero imaginary") load_smite_2d(SmiteSMD(dir, "pc.mat"))
+        @test [e.photons for e in back.emitters] == [900.0]
+        # A number a double would round, or a value that is not a number, is an ArgumentError
         # naming the emitter (0.1.0 wrote a cell its loader refused); nothing is written
         for (name, es, msg) in (
                 ("p53.mat", [_anyloc(photons=Int64(2)^53 + 1), _anyloc(photons=1.0)], "photons of emitter 1 is 9007199254740993"),
                 ("bgbig.mat", [_anyloc(), _anyloc(bg=big"0.1")], "bg of emitter 2 is"),
                 ("pmiss.mat", [_anyloc(photons=missing)], "photons of emitter 1 is missing"),
                 ("xbig.mat", [_anyloc(x=big"0.1")], "x of emitter 1 is"),
-                ("pc.mat", [_anyloc(photons=1.0 + 1.0im)], "photons of emitter 1 is 1.0 + 1.0im"))
+                ("pcbig.mat", [_anyloc(photons=big"0.1" + 1im)], "photons of emitter 1 is"),
+                ("ptext.mat", [_anyloc(), _anyloc(bg="10")], "bg of emitter 2 is \"10\""))
             err = try save_smite(sm(es), dir, name); nothing catch ex; ex end
             @test err isa ArgumentError
             err isa ArgumentError && @test occursin(msg, err.msg) && occursin("MATLAB double holds exactly", err.msg)
@@ -673,5 +680,42 @@ end
         save_smite(AnyCountSMLD([_anyloc(photons=4.0 + 0.0im)], IdealCamera(1:64, 1:64, 0.1), 1, 1,
                                 Dict{String,Any}()), dir, "c0.mat")
         @test load_smite_2d(SmiteSMD(dir, "c0.mat")).emitters[1].photons === 4.0
+    end
+end
+
+@testset "save_smite writes Z one way for emitters and metadata" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    sm(v; md=Dict{String,Any}()) = SmiteSMLD{Float64,eltype(v)}(v, cam, 1, 1, md)
+    A = SMLMCore.AbstractEmitter
+    e2 = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    e3 = Emitter3DFit{Float64}(1.0, 1.5, 0.75, 1000.0, 10.0, 0.01, 0.01, 0.125, 50.0, 2.0)
+    mktempdir() do dir
+        # Complex z is written as a complex column, as 0.1.0 did; load_smite_3d drops that row
+        save_smite(sm([_oddz(0.25 + 1.0im, 0.02), _oddz(0.5 + 0.0im, 0.02)]), dir, "cz.mat")
+        smd = matread(joinpath(dir, "cz.mat"))["SMD"]
+        @test smd["NDims"] == 3 && smd["Z"] isa AbstractArray{ComplexF64}
+        back = @test_logs (:warn, r"non-zero imaginary") load_smite_3d(SmiteSMD(dir, "cz.mat"))
+        @test [e.z for e in back.emitters] == [0.5]
+        # A number a double would round is an error wherever it is in the column, also after a
+        # value that is not a number (which alone saves without Z)
+        for zs in ([missing, big"0.1"], [big"0.1", missing])
+            @test_throws r"z of emitter \d is 0.1" save_smite(sm([_oddz(z, 0.02) for z in zs]), dir, "zo.mat")
+            @test_throws r"σ_z of emitter \d is 0.1" save_smite(sm([_oddz(0.5, z) for z in zs]), dir, "zo.mat")
+        end
+        @test !isfile(joinpath(dir, "zo.mat"))
+        # Metadata Z and Z_SE never stand in for emitters whose own Z was not saved
+        md() = Dict{String,Any}("Z" => [10.0, 20.0], "Z_SE" => [0.1, 0.1])
+        @test_logs (:warn, r"mixed 2D/3D") save_smite(sm(A[e2, e3]; md=md()), dir, "mixz.mat")
+        @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(missing, 0.02), _oddz(missing, 0.02)]; md=md()),
+                                                     dir, "missz.mat")
+        for f in ("mixz.mat", "missz.mat")
+            smd = matread(joinpath(dir, f))["SMD"]
+            @test !haskey(smd, "Z") && !haskey(smd, "Z_SE") && smd["NDims"] == 2
+        end
+        # On 2D emitters, metadata Z and Z_SE not loaded from a SMITE file are ordinary metadata:
+        # written as given, and the file stays 2D
+        save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => Any["bad", 2.0], "Z_SE" => [0.1, 0.2])), dir, "mdz.mat")
+        smd = matread(joinpath(dir, "mdz.mat"))["SMD"]
+        @test smd["NDims"] == 2 && smd["Z"] == Any["bad", 2.0]
     end
 end

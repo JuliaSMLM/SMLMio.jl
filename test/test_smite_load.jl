@@ -273,6 +273,28 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             quiet(() -> save_smite(smld, dir, "zse-saved.mat"))
             saved = matread(joinpath(dir, "zse-saved.mat"))["SMD"]
             @test !haskey(saved, "Z_SE") && saved["NDims"] == 2
+            # A complex Z_SE in one row (SMITE's fit can give one), loaded in 2D and saved, is
+            # written as a complex column with NDims 3; load_smite_3d drops that row, as it does
+            # in the original file
+            s3 = smite_smd_3d(3); s3["Z_SE"] = col(ComplexF64[0.04, 0.05 + 0.01im, 0.04])
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zsec.mat", s3)))
+            save_smite(smld, dir, "zsec-saved.mat")
+            saved = matread(joinpath(dir, "zsec-saved.mat"))["SMD"]
+            @test saved["NDims"] == 3 && saved["Z_SE"] isa AbstractArray{ComplexF64}
+            @test [e.id for e in quiet(() -> load_smite_3d(SmiteSMD(dir, "zsec-saved.mat"))).emitters] == [1, 3]
+            # Z or Z_SE holding a value that is not a number are not saved, with a warning; 2D
+            s3 = smite_smd_3d(2); s3["Z"] = Any[0.5, "bad"]
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zbad.mat", s3)))
+            @test_logs (:warn, r"Z, Z_SE not saved: they hold values that are not numbers") save_smite(
+                smld, dir, "zbad-saved.mat")
+            saved = matread(joinpath(dir, "zbad-saved.mat"))["SMD"]
+            @test !haskey(saved, "Z") && !haskey(saved, "Z_SE") && saved["NDims"] == 2
+            # A selection of no localizations from a 3D file loaded in 2D stays 3D
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "z3e.mat", smite_smd_3d(2))))
+            none = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[Int[]], smld.camera,
+                                                             smld.n_frames, smld.n_datasets, smld.metadata)
+            save_smite(none, dir, "z3e-saved.mat")
+            @test matread(joinpath(dir, "z3e-saved.mat"))["SMD"]["NDims"] == 3
             # Z a double would round is an error naming the field and the file row
             s3 = smite_smd_3d(2); s3["Z"] = Any[Int64(2)^53 + 1, 0.5f0]
             smld = quiet(() -> load_smite_2d(write_smd(dir, "zbig.mat", s3)))

@@ -137,20 +137,22 @@ write; the error then says the file is incomplete. The data are unchanged in mem
 again once the cause is fixed. It contains:
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`. Each
-  column is converted by its values: all `Float32` stays MATLAB single, anything else is
-  written as double. So `Float32` and `Float64` emitters together are written as double, never
-  as the cell MAT would write for a mixed vector (which SMITE cannot compute with), and
-  integers or `Float16` values (which MAT cannot write) become doubles; a complex value with a
-  zero imaginary part is its real part. A value that is not a real number, or that a double
-  would round (a `BigFloat`, an integer above 2^53), is an `ArgumentError` naming the field and
-  the emitter, and nothing is written. Positions are computed in `Float64` from the written
-  pixel size, then stored as single for `Float32` data; one whose value in pixels the stored
-  type cannot hold is an `ArgumentError` too.
+  column is converted by its values: all `Float32` stays MATLAB single, real values are
+  written as double, and a column with a complex value (one with a non-zero imaginary part;
+  otherwise it is its real part) as complex double, which the loaders screen as they do
+  SMITE's complex fits. So `Float32` and `Float64` emitters together are written as double,
+  never as the cell MAT would write for a mixed vector (which SMITE cannot compute with), and
+  integers or `Float16` values (which MAT cannot write) become doubles. A value that is not a
+  number, or a number that a double would round (a `BigFloat`, an integer above 2^53), is an
+  `ArgumentError` naming the field and the emitter, and nothing is written. Positions are
+  computed in `Float64` from the written pixel size, then stored as single for `Float32` data;
+  one whose value in pixels the stored type cannot hold is an `ArgumentError` too.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
-  has properties `z` and `σ_z`, converted as above; a real `z` or `σ_z` a double would round is
-  an `ArgumentError`. 3D data whose `z` or `σ_z` are not all real numbers (`missing`), and
-  mixed 2D/3D data, save without `Z`, with a warning: an SMD has one `Z` column for all
-  localizations, so save 2D and 3D data separately to keep it.
+  has properties `z` and `σ_z`, converted as above; a `z` or `σ_z` a double would round is an
+  `ArgumentError`, wherever it is in the column. 3D data whose `z` or `σ_z` are not all numbers
+  (`missing`), and mixed 2D/3D data, save without `Z`, with a warning: an SMD has one `Z` column
+  for all localizations, so save 2D and 3D data separately to keep it. The metadata's `Z` and
+  `Z_SE` are then not saved either, so they never stand in for the emitters' `z`.
 - `XSize`, `YSize` and `PixelSize` from the camera (`PixelSize` as single for a `Float32`
   camera, so the file loads back with the same camera), `NFrames`, `NDatasets` and `NDims`; counts
   and indices as doubles, as most SMITE results files hold them. They follow the loaders' rule,
@@ -169,9 +171,11 @@ again once the cause is fixed. It contains:
 - SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
   `PValue` still belongs to its localization. Each keeps its MATLAB class (SMITE's `IndSMD` is
   a cell, `ThreshFlag` uint32), except `Z` and `Z_SE`, which `load_smite_2d` keeps from a 3D
-  file: they are written as number columns, as above, exactly or not at all (an
-  `ArgumentError` naming the field and file row), and the file says `NDims` 3 when both are
-  written with one value per localization. An emitter is taken to be the row its `id` names
+  file: on 2D emitters they are written as `z` and `σ_z` are, above (a number a double would
+  round is an `ArgumentError` naming the field and file row; a value that is not a number drops
+  both, with a warning), and the file says `NDims` 3 when both are written and it has
+  localizations or its `NDims` was 3. `Z` and `Z_SE` in the metadata of data not loaded from
+  SMITE are ordinary metadata and leave the file 2D. An emitter is taken to be the row its `id` names
   when its frame and photons equal that row's. The fields are written only when every emitter is
   such a row; for combined localizations (frame connection's combined output), changed frames or
   photons, or emitters joined from another file, they are dropped with a warning. Emitters from
