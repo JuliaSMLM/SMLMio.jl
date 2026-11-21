@@ -285,7 +285,8 @@ the loaders treat empty and per-dataset fields, and what is kept in the metadata
 
 # Keyword Arguments
 - `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize` (absent or
-  empty); when the file has one, a different `pixel_size` is an error.
+  empty), and then a `Float32` one gives a `Float32` camera; when the file has one, a different
+  `pixel_size` is an error.
 
 # Returns
 - [`SmiteSMLD`](@ref): the emitters in µm, with `n_frames` frames per dataset and the SMD's
@@ -337,8 +338,9 @@ at least 0 is also appended to `metadata["data_size"]`. Everything else (optiona
 - `smd::SmiteSMD`: the file and variable to load.
 
 # Keyword Arguments
-- `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize`; when the
-  file has one, a different `pixel_size` is an error.
+- `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize`, and then a
+  `Float32` one gives a `Float32` camera; when the file has one, a different `pixel_size` is an
+  error.
 
 # Returns
 - [`SmiteSMLD`](@ref): the emitters in µm.

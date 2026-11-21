@@ -99,6 +99,9 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   naming it, for the optional fields too; an empty one is a field left empty.
 - **Complex values.** Localizations with a non-zero imaginary part in any position, photon or
   background field are dropped with a warning.
+- **Number types.** Positions, photons, background and their uncertainties load as `Float64`,
+  whatever the file stores; an integer above 2^53 in one of these fields (possible only in a
+  hand-built file) loads rounded. Frames, datasets and track ids load as `Int`, exactly.
 
 ## Saving
 
