@@ -14,6 +14,7 @@ end
 # MAT reads a 1x1 field as a scalar and an empty field as a 0x0 matrix.
 _smite_length(v::AbstractArray) = length(v)
 _smite_length(::Number) = 1
+_smite_length(v::AbstractString) = isempty(v) ? 0 : -1   # empty text: an empty field (MAT 0.10)
 _smite_length(_) = -1
 _smite_vec(v::AbstractArray) = vec(v)
 _smite_vec(v::Number) = [v]
@@ -24,14 +25,15 @@ _smite_vec(v::Number) = [v]
 # is used: promoting them to one type could round them (an Int64 with a Float32 gives Float32).
 function _smite_numeric(v)
     v isa Number && return [v]
+    v isa AbstractString && isempty(v) && return Float64[]
     v isa AbstractArray || return nothing
     v isa AbstractArray{<:Number} && return vec(v)
     all(x -> x isa Number, v) || return nothing
     return Number[x for x in vec(v)]
 end
 
-# A field SMITE left empty: a 0 x 0 matrix, an empty cell, or empty text (MAT 0.10 reads an empty
-# MATLAB field as "", later versions as an empty array).
+# A field left empty: a 0 x 0 matrix, an empty cell, or empty text (MAT 0.10 reads an empty MATLAB
+# char field, '', as "", later versions as an empty array; an empty double is an empty array in all).
 _smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
 
 # A scalar field (XSize, PixelSize, ...) as the file stores it, or nothing when it is absent or
@@ -40,7 +42,7 @@ _smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
 function _smite_scalar(where, s, key)
     v = get(s, key, nothing)
     v === nothing && return nothing
-    # Empty: a 0 x 0 matrix, or the empty text MAT 0.10 reads for an empty MATLAB field
+    # Empty: a 0 x 0 matrix, or the empty text MAT 0.10 reads for an empty char field
     _smite_empty(v) && return nothing
     k = _smite_length(v)
     k == 1 && first(v) isa Number && return first(v)

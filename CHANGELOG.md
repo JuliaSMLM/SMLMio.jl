@@ -32,9 +32,9 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   frame or track id in a cell is never rounded. An optional field (`Photons_SE`, `Bg_SE`,
   `DatasetNum`, `ConnectID`) holding something other than numbers, text included, is an
   `ArgumentError` naming it, where it failed later with a `MethodError` or, for text, loaded
-  as a column of defaults. Empty text, which MAT 0.10 reads for an empty MATLAB field, is an
-  empty field, in a scalar such as `PixelSize` and in a `ConnectID` that `save_smite` writes
-  back empty.
+  as a column of defaults. Empty text, which MAT 0.10 reads for an empty MATLAB char field
+  (`''`), is an empty field everywhere, as an empty array is: in a per-localization field of
+  a file without localizations, and in a `ConnectID` that `save_smite` writes back empty.
 - `save_smite` of emitters of `Float32` and `Float64` together (a `Union` element type) wrote
   `Photons`, `Bg`, their errors and `Z`, `Z_SE` as MATLAB cells, which MAT makes of a vector of
   mixed types, so `load_smite_3d` refused its own file; a 3D file with such cells, loaded in 2D
