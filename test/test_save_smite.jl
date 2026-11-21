@@ -302,7 +302,6 @@ end
         U3 = Union{Emitter3DFit{Float32}, Emitter3DFit{Float64}}
         unchanged = (sm([e2, e2]), sm([e3, e3]), sm([e3f, e3f]), sm(U3[]), sm(A[]), sm(A[e2, e3]),
                      sm([fz, fz]), sm([hz, hz]), sm([_oddz(missing, 0.02), _oddz(missing, 0.02)]),
-                     sm([_oddz(big"0.1", 0.02), _oddz(big"0.1", 0.02)]),
                      sm(A[e3, _oddz(missing, 0.02)]))
         for s in unchanged
             @test first(_legacy_compare(s)) == camkeys
@@ -332,10 +331,15 @@ end
         mktempdir() do dir
             @test_logs (:warn, r"mixed 2D/3D") save_smite(sm(A[e2, e3]), dir, "m.mat")
             @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(missing, 0.02)]), dir, "o.mat")
-            # z that a double would round (BigFloat) is not written
-            @test_logs (:warn, r"not all real numbers a MATLAB double holds exactly: Z not saved") save_smite(
-                sm([_oddz(big"0.1", 0.02)]), dir, "b.mat")
-            @test !haskey(matread(joinpath(dir, "b.mat"))["SMD"], "Z")
+            # z that are not real numbers save without Z (missing, above); a real z a double would
+            # round (BigFloat) is an error naming the emitter, and nothing is written
+            @test_throws r"z of emitter 2 is .*MATLAB double holds exactly" save_smite(
+                sm([_oddz(0.5, 0.02), _oddz(big"0.1", 0.02)]), dir, "b.mat")
+            @test !isfile(joinpath(dir, "b.mat"))
+            @test_throws r"σ_z of emitter 1" save_smite(sm([_oddz(0.5, big"0.1")]), dir, "b.mat")
+            # A complex z with no imaginary part is its real part, as 0.1.0 saved it
+            @test_logs save_smite(sm([_oddz(0.25 + 0.0im, 0.02)]), dir, "c.mat")
+            @test matread(joinpath(dir, "c.mat"))["SMD"]["Z"] === 0.25
             # Float16 z loses nothing: written as double
             @test_logs save_smite(sm([_oddz(Float16(0.5), Float16(0.02))]), dir, "h.mat")
             @test matread(joinpath(dir, "h.mat"))["SMD"]["Z"] === 0.5
@@ -637,5 +641,37 @@ end
             err isa ArgumentError && @test occursin(msg, err.msg) && occursin("MATLAB double holds exactly", err.msg)
             @test !isfile(joinpath(dir, name))
         end
+    end
+end
+
+@testset "save_smite checks the camera it writes and computes positions in Float64" begin
+    em = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+    mktempdir() do dir
+        # A camera the loaders would refuse is an ArgumentError, before anything is written
+        for (name, cam, msg) in (
+                ("ny0.mat", IdealCamera(2, 0, 0.125), "the camera has 2 × 0 pixels"),
+                ("wide.mat", IdealCamera(2^24 + 1, 1, 1.0f0), "16777217 × 1 pixels of 1.0 µm do not give finite, increasing"),
+                ("inf.mat", IdealCamera(1, 1, big"1e309"), "the camera's pixel size Inf is not finite"))
+            err = try save_smite(SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name); nothing catch ex; ex end
+            @test err isa ArgumentError
+            err isa ArgumentError && @test occursin(msg, err.msg)
+            @test !isfile(joinpath(dir, name))
+        end
+        # Positions in SMITE's pixels are computed in Float64 from the written pixel size: a
+        # position a double holds loads back exactly, with a Float32 camera too
+        cam32 = IdealCamera(1:64, 1:64, 0.125f0)
+        x = 33554433 // 33554432                       # 1 + 2^-25 µm
+        save_smite(AnyCountSMLD([_anyloc(x=x)], cam32, 1, 1, Dict{String,Any}()), dir, "exact.mat")
+        @test matread(joinpath(dir, "exact.mat"))["SMD"]["X"] === 8.500000238418579
+        @test load_smite_2d(SmiteSMD(dir, "exact.mat")).emitters[1].x === Float64(x)
+        # A finite position whose pixel coordinate a single cannot hold is an ArgumentError
+        e32 = Emitter2DFit{Float32}(floatmax(Float32), 1.0f0, 1000.0f0, 10.0f0, 0.01f0, 0.01f0, 50.0f0, 2.0f0)
+        @test_throws r"x of emitter 1 is .*a MATLAB single cannot hold" save_smite(
+            SMLMCore.BasicSMLD([e32], IdealCamera(1:64, 1:64, 0.25f0), 1, 1), dir, "over.mat")
+        @test !isfile(joinpath(dir, "over.mat"))
+        # Values with a zero imaginary part are their real part, as 0.1.0 saved them
+        save_smite(AnyCountSMLD([_anyloc(photons=4.0 + 0.0im)], IdealCamera(1:64, 1:64, 0.1), 1, 1,
+                                Dict{String,Any}()), dir, "c0.mat")
+        @test load_smite_2d(SmiteSMD(dir, "c0.mat")).emitters[1].photons === 4.0
     end
 end

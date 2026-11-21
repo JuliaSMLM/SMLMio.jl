@@ -114,8 +114,9 @@ a [`SmiteSMLD`](@ref), a `BasicSMLD`, or your own type with `emitters`, `camera`
 `n_datasets` and `metadata`. `Emitter2D` and `Emitter3D` cannot be saved. The folder must exist.
 A missing folder, a folder (or anything but a file) of the file's name, a symlink to nothing, a
 name that is no file, an existing file you may not write, too little free space to rewrite one
-(where the system reports it), a camera whose pixels
-are not uniform and square, and metadata keys that are not MATLAB names (an ASCII letter, then up
+(where the system reports it), a camera whose pixels are not uniform and square or that the
+loaders could not build back (no pixels along an axis, a pixel size that is not finite as
+written, or `Float32` edges that round onto each other), and metadata keys that are not MATLAB names (an ASCII letter, then up
 to 62 letters, digits or underscores; Dict values and arrays of Dicts need such string keys) are
 each an
 `ArgumentError` naming what is wrong, and nothing is written.
@@ -136,14 +137,17 @@ again once the cause is fixed. It contains:
   column is converted by its values: all `Float32` stays MATLAB single, anything else is
   written as double. So `Float32` and `Float64` emitters together are written as double, never
   as the cell MAT would write for a mixed vector (which SMITE cannot compute with), and
-  integers or `Float16` values (which MAT cannot write) become doubles. A value that is not a
-  real number, or that a double would round (a `BigFloat`, an integer above 2^53), is an
-  `ArgumentError` naming the field and the emitter, and nothing is written.
+  integers or `Float16` values (which MAT cannot write) become doubles; a complex value with a
+  zero imaginary part is its real part. A value that is not a real number, or that a double
+  would round (a `BigFloat`, an integer above 2^53), is an `ArgumentError` naming the field and
+  the emitter, and nothing is written. Positions are computed in `Float64` from the written
+  pixel size, then stored as single for `Float32` data; one whose value in pixels the stored
+  type cannot hold is an `ArgumentError` too.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
-  has properties `z` and `σ_z`, converted as above when every `z` and `σ_z` is a real number a
-  double holds exactly. Other non-empty 3D or mixed 2D/3D data save without `Z`, with a
-  warning: an SMD has one `Z` column for all localizations, so save 2D and 3D data separately
-  to keep it.
+  has properties `z` and `σ_z`, converted as above; a real `z` or `σ_z` a double would round is
+  an `ArgumentError`. 3D data whose `z` or `σ_z` are not all real numbers (`missing`), and
+  mixed 2D/3D data, save without `Z`, with a warning: an SMD has one `Z` column for all
+  localizations, so save 2D and 3D data separately to keep it.
 - `XSize`, `YSize` and `PixelSize` from the camera (`PixelSize` as single for a `Float32`
   camera, so the file loads back with the same camera), `NFrames`, `NDatasets` and `NDims`; counts
   and indices as doubles, as most SMITE results files hold them. They follow the loaders' rule,

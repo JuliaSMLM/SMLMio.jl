@@ -38,9 +38,13 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   mixed types, so `load_smite_3d` refused its own file; a 3D file with such cells, loaded in 2D
   and saved, kept its cell `Z`. Every emitter column is now converted by its values: all
   `Float32` stays single, anything else is written as double when a double holds every value
-  exactly (integers, `Float16`), and a value that is not real or that a double would round is
-  an `ArgumentError` naming the field and the emitter (for `z` and `σ_z` that are not real
-  numbers, such as `missing`, the file is saved without `Z`, with a warning, as before). 3D
+  exactly (integers, `Float16`; a complex value with a zero imaginary part is its real part),
+  and a value that is not real or that a double would round is an `ArgumentError` naming the
+  field and the emitter (for `z` and `σ_z` that are not real numbers, such as `missing`, the
+  file is saved without `Z`, with a warning, as before). Positions in SMITE's pixels are
+  computed in `Float64` from the written pixel size, where a `Float32` camera rounded them, and
+  `save_smite` refuses a camera its loaders could not build back (no pixels along an axis, a
+  pixel size that is not finite as written, `Float32` edges that round onto each other). 3D
   data whose `z` mixes `Float32` and `Float64`, or is `Float16`, save their `Z` instead of
   dropping it. `Z` and `Z_SE` kept in the metadata by `load_smite_2d` are written the same way,
   and the file says `NDims` 3 only when both are written with one value per localization; every

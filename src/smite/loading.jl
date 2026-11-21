@@ -61,6 +61,18 @@ function _smite_pixel_size(where, what, v)
     return px
 end
 
+# The camera the loaders build from XSize, YSize and the pixel size. In Float32, a large image or
+# pixel size can give edges that are not finite or that round onto each other, which is an
+# ArgumentError; save_smite checks the camera it writes with this too.
+function _smite_camera(where, xsize, ysize, px)
+    camera = IdealCamera(1:xsize, 1:ysize, px)
+    increasing(e) = all(isfinite, e) && all(k -> e[k+1] > e[k], 1:length(e)-1)
+    increasing(camera.pixel_edges_x) && increasing(camera.pixel_edges_y) || throw(ArgumentError(
+        "$where: $xsize × $ysize pixels of $px µm do not give finite, increasing pixel edges " *
+        "in $(typeof(px))"))
+    return camera
+end
+
 # Per-localization fields every SMITE fit writes; a file without one of them cannot be loaded.
 const _SMITE_REQUIRED = ["X", "Y", "Photons", "Bg", "X_SE", "Y_SE", "FrameNum"]
 const _SMITE_REQUIRED_3D = ["Z", "Z_SE"]
@@ -153,13 +165,7 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
         "$where has no NFrames or NDatasets"))
     xsize, ysize = _smite_count(where, "XSize", xsize), _smite_count(where, "YSize", ysize)
     nframes, ndatasets = _smite_count(where, "NFrames", nframes), _smite_count(where, "NDatasets", ndatasets)
-    camera = IdealCamera(1:xsize, 1:ysize, px)
-    # In Float32, a large image or pixel size can give edges that are not finite or that round
-    # onto each other
-    increasing(e) = all(isfinite, e) && all(k -> e[k+1] > e[k], 1:length(e)-1)
-    increasing(camera.pixel_edges_x) && increasing(camera.pixel_edges_y) || throw(ArgumentError(
-        "$where: $xsize × $ysize pixels of $px µm do not give finite, increasing pixel edges " *
-        "in $(typeof(px))"))
+    camera = _smite_camera(where, xsize, ysize, px)
 
     # Screen complex values in the per-localization columns read from the file
     fields_to_check = filter(k -> !(k in defaulted),
