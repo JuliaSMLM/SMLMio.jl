@@ -71,30 +71,28 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
     # the center of the top-left pixel; positions here are microns from the camera's corner.
-    # SMITE has one PixelSize, so the camera's pixels must be uniform and square: every edge lies
-    # on the first pixel's grid to a thousandth of a pixel (edges carry floating rounding, which
-    # in a Float32 camera grows with distance from the origin).
+    # SMITE has one PixelSize, so the camera must be the one the loaders will build from XSize,
+    # YSize and the written pixel size (single for a Float32 camera, so the file loads back with a
+    # Float32 camera; otherwise double): each edge, relative to the camera's first, within a
+    # thousandth of a pixel of the rebuilt camera's. The difference is taken in the edges' own type
+    # (exact for a BigFloat origin, the stored spacing for a Float32 camera) and compared in Float64.
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
     nx, ny = length(ex) - 1, length(ey) - 1
     nx >= _SMITE_COUNT_MIN["XSize"] && ny >= _SMITE_COUNT_MIN["YSize"] || throw(ArgumentError(
         "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must each be at least 1"))
-    increasing(e) = all(k -> e[k+1] > e[k], 1:length(e)-1)
-    increasing(ex) && increasing(ey) ||
-        throw(ArgumentError("save_smite: this camera's pixel edges do not strictly increase"))
     x0, y0 = ex[1], ey[1]
     px = ex[2] - ex[1]
-    on_grid(edges, e0) = all(k -> abs(edges[k] - (e0 + (k - 1) * px)) <= px / 1000, eachindex(edges))
-    px > 0 && on_grid(ex, x0) && on_grid(ey, y0) ||
-        throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels " *
-                            "are not uniform and square"))
-    # The pixel size as written, single for a Float32 camera (so the file loads back with a Float32
-    # camera) and otherwise double; the camera the loaders will build from it must be valid
-    pxw = eltype(ex) === Float32 ? px : Float64(px)
-    _smite_camera("save_smite", nx, ny, _smite_pixel_size("save_smite", "the camera's pixel size", pxw))
-    # Positions in SMITE's pixels, computed in Float64 from the written pixel size, as the loaders
-    # compute them back
+    pxw = _smite_pixel_size("save_smite", "the camera's pixel size", eltype(ex) === Float32 ? px : Float64(px))
+    rebuilt = _smite_camera("save_smite", nx, ny, pxw)
     pxf = Float64(pxw)
+    same(edges, e0, re) = all(k -> abs(Float64(edges[k] - e0) - Float64(re[k])) <= pxf / 1000, eachindex(edges))
+    same(ex, x0, rebuilt.pixel_edges_x) && same(ey, y0, rebuilt.pixel_edges_y) ||
+        throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels are " *
+                            "not uniform and square (its edges are not those of $nx × $ny pixels of " *
+                            "$pxw µm)"))
+    # Positions in SMITE's pixels are computed in Float64 from the written pixel size, as the
+    # loaders compute them back
     iszero(x0) && iszero(y0) || @warn("save_smite: the camera's first pixel edge is at ($x0, $y0) µm; " *
         "SMITE has no origin, so the file loads back with the camera at 0 and positions moved by that offset")
     s["X"] = _pixel_column("x", [e.x for e in smld.emitters], x0, pxf)

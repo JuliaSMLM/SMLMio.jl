@@ -118,9 +118,11 @@ a [`SmiteSMLD`](@ref), a `BasicSMLD`, or your own type with `emitters`, `camera`
 `n_datasets` and `metadata`. `Emitter2D` and `Emitter3D` cannot be saved. The folder must exist.
 A missing folder, a folder (or anything but a file) of the file's name, a symlink to nothing, a
 name that is no file, an existing file you may not write, too little free space to rewrite one
-(where the system reports it), a camera whose pixels are not uniform and square or that the
-loaders could not build back (no pixels along an axis, edges that do not strictly increase, a
-pixel size that is not finite as written, or `Float32` edges that round onto each other), and
+(where the system reports it), a camera whose pixels are not uniform and square (its edges,
+relative to its first, are not within a thousandth of a pixel of those the loaders rebuild from
+`XSize`, `YSize` and the written `PixelSize`) or that the loaders could not build back (no pixels
+along an axis, a pixel size that is not finite as written, or `Float32` edges that round onto
+each other), and
 metadata keys that are not MATLAB names (an ASCII letter, then up to 62 letters, digits or
 underscores; Dict values and arrays of Dicts need such string keys) are each an
 `ArgumentError` naming what is wrong, and nothing is written.
@@ -147,8 +149,8 @@ again once the cause is fixed. It contains:
   number, or a number that a double would round (a `BigFloat`, an integer above 2^53), is an
   `ArgumentError` naming the field and the emitter, and nothing is written. Positions are
   computed in `Float64` from the written pixel size (the camera's origin subtracted exactly),
-  then stored as single for `Float32` data; one whose value in pixels would load back as
-  infinite, or an uncertainty that would load back as 0, is an `ArgumentError` too.
+  then stored as single for `Float32` data; a finite one whose value in pixels would load back
+  as infinite, or a non-zero uncertainty that would load back as 0, is an `ArgumentError` too.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
   has properties `z` and `σ_z`, converted as above; a `z` or `σ_z` a double would round is an
   `ArgumentError`, wherever it is in the column. 3D data whose `z` or `σ_z` are not all numbers

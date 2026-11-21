@@ -657,7 +657,7 @@ end
         # A camera the loaders would refuse is an ArgumentError, before anything is written
         for (name, cam, msg) in (
                 ("ny0.mat", IdealCamera(2, 0, 0.125), "the camera has 2 × 0 pixels"),
-                ("wide.mat", IdealCamera(2^24 + 1, 1, 1.0f0), "pixel edges do not strictly increase"),
+                ("wide.mat", IdealCamera(2^24 + 1, 1, 1.0f0), "16777217 × 1 pixels of 1.0 µm do not give finite, increasing"),
                 ("inf.mat", IdealCamera(1, 1, big"1e309"), "the camera's pixel size Inf is not finite"))
             err = try save_smite(SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name); nothing catch ex; ex end
             @test err isa ArgumentError
@@ -693,9 +693,18 @@ end
         camb = IdealCamera(collect(big0 .+ (0:4)), collect(BigFloat(0):4))
         save_smite(AnyCountSMLD([_anyloc(x=Float64(2)^53 + 2)], camb, 1, 1, Dict{String,Any}()), dir, "bigorigin.mat")
         @test matread(joinpath(dir, "bigorigin.mat"))["SMD"]["X"] === 1.5
-        # A camera whose edges do not increase is refused
-        flat = IdealCamera(Float32[0, 1], Float32[2^24, 2^24])
-        @test_throws r"pixel edges do not strictly increase" save_smite(SMLMCore.BasicSMLD([em], flat, 1, 1), dir, "flat.mat")
+        # A camera whose edges are not those the loaders rebuild from the written pixel size is
+        # refused: equal edges, a Float32 camera whose stored spacing far from the origin is not
+        # its first pixel's, a Float16 camera (its edges round differently from the double written)
+        for (name, cam) in (("flat.mat", IdealCamera(Float32[0, 1], Float32[2^24, 2^24])),
+                            ("far32.mat", IdealCamera(Float32[0, 0.1], Float32[10000, 10000.1])),
+                            ("f16.mat", IdealCamera(512, 1, Float16(0.1))))
+            @test_throws r"not uniform and square" save_smite(SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name)
+            @test !isfile(joinpath(dir, name))
+        end
+        # A large Float32 camera at 0 is rebuilt exactly, and saves
+        save_smite(SMLMCore.BasicSMLD([em], IdealCamera(4096, 4096, 0.1f0), 1, 1), dir, "big32.mat")
+        @test load_smite_2d(SmiteSMD(dir, "big32.mat")).camera.pixel_edges_x == IdealCamera(4096, 4096, 0.1f0).pixel_edges_x
         # Values with a zero imaginary part are their real part, as 0.1.0 saved them
         save_smite(AnyCountSMLD([_anyloc(photons=4.0 + 0.0im)], IdealCamera(1:64, 1:64, 0.1), 1, 1,
                                 Dict{String,Any}()), dir, "c0.mat")
