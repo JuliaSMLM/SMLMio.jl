@@ -24,10 +24,10 @@ Which fields are written, which are dropped and what a load gives back are on th
 
 # Notes
 - The file is written in full to a temporary file before the target is touched, so a save that
-  fails while writing leaves an existing file as it was, and a file another program holds open
-  is refused; only an error once the file is being rewritten (a full disk, a file size limit, a
-  lost share) can leave it partly written, and the error then says so. What it refuses, and how
-  a file is rewritten, are on the [SMITE files](@ref) page.
+  fails while writing leaves an existing file as it was; only an error once the file is being
+  rewritten (a full disk, a file size limit, a lost share) can leave it partly written, and the
+  error then says so. It does not coordinate with other programs using the same file. What it
+  refuses, and how a file is rewritten, are on the [SMITE files](@ref) page.
 
 - `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
   load as 0.
@@ -260,8 +260,8 @@ end
 # The whole file is written to a temporary file first (in a folder of its own, _staging_dir) and
 # copied into place only when complete,
 # in place so that an existing file keeps its owner, group, permissions and links; the guide's
-# SMITE files page states the rules. `copy` is a seam for tests.
-function _write_smd(target::String, s; copy=_copy_into)
+# SMITE files page states the rules. `copy` and `recreate` are seams for tests.
+function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
         throw(ArgumentError("save_smite: $(repr(target)) names no file"))
@@ -287,41 +287,52 @@ function _write_smd(target::String, s; copy=_copy_into)
     tmp = joinpath(stage, "SMD.mat")
     try
         matwrite(tmp, Dict("SMD" => s))
-        if existed
+        # A new file is created here, exclusively, so that a failure removes only a file this save
+        # made; one that appeared at the target while the save was staged is an existing file
+        created = !existed && _create_new(target)
+        if !created
             _check_space(target, filesize(tmp) - filesize(target))
-            # A program with the file open through HDF5 (another process, or this session) holds a
-            # lock on it, which HDF5 finds only after truncating the file: refused here first
-            _flock_state(target) === :busy && throw(ArgumentError("save_smite: $(repr(target)) is " *
-                "open in another program or in this session (it holds a lock on the file); close " *
-                "it and save again. Nothing was written"))
-            # HDF5 refuses to recreate a file this session holds open without a lock, before it
-            # truncates it; a refusal after truncating (a lock taken since the check) is reported as
-            # an incomplete file
-            n0 = filesize(target)
+            # HDF5 refuses to recreate a file this session holds open, before it truncates it. With
+            # file locking on, it truncates a file another program holds locked and then refuses
+            # it: a refusal that changed the file is reported as an incomplete file
+            st0 = stat(target)
             try
-                close(matopen(target, "w"))
+                recreate(target)
             catch e
-                filesize(target) == n0 && rethrow()
+                _unchanged(st0, stat(target)) && rethrow()
                 _incomplete(target, e)
             end
         end
-        held = nothing
         try
-            # An existing file stays locked through the copy (where the system locks files), so that
-            # a program opening it through HDF5 meanwhile is refused rather than reading it half written
-            existed && (held = _hold_lock(target))
             copy(tmp, target)
         catch e
             # A new file that could not be finished is removed
-            existed || (try rm(target; force=true) catch end; rethrow())
+            created && (try rm(target; force=true) catch end; rethrow())
             _incomplete(target, e)
-        finally
-            held === nothing || close(held)
         end
     finally
         rm(stage; recursive=true, force=true)
     end
     return nothing
+end
+
+_recreate(target) = close(matopen(target, "w"))
+# The file's size and times are as they were
+_unchanged(a, b) = a.size == b.size && a.mtime == b.mtime && a.ctime == b.ctime
+
+# Creates `path` empty, only if nothing is there (O_EXCL): true when it did, false when a file is
+# already there; any other failure is an ArgumentError naming the file.
+function _create_new(path)
+    F = Base.Filesystem
+    f = try
+        F.open(path, F.JL_O_WRONLY | F.JL_O_CREAT | F.JL_O_EXCL, 0o666)
+    catch e
+        e isa Base.IOError && e.code == Base.UV_EEXIST && return false
+        e isa Base.IOError || rethrow()
+        throw(ArgumentError("save_smite: $(repr(path)) cannot be created: $(sprint(showerror, e))"))
+    end
+    close(f)
+    return true
 end
 
 # An existing file was truncated and not rewritten in full: say so, and that the data can be saved
@@ -332,28 +343,6 @@ function _incomplete(target, e)
           "is fixed."
     e isa InterruptException && (@warn("$msg The save was interrupted."); rethrow())
     error("$msg The error was: $(sprint(showerror, e))")
-end
-
-# HDF5 locks the files it opens with flock (shared to read, exclusive to write) on Linux and
-# macOS, unless HDF5_USE_FILE_LOCKING is FALSE. An exclusive, non-blocking flock on a separate open
-# file says whether a program holds such a lock: :busy; :locked when the lock was taken (held by
-# `io`); :unknown where the system or file system cannot lock.
-const _LOCK_EX, _LOCK_NB = Cint(2), Cint(4)
-function _flock(io)
-    Sys.isunix() || return :unknown
-    ccall(:flock, Cint, (Cint, Cint), fd(io), _LOCK_EX | _LOCK_NB) == 0 && return :locked
-    return Libc.errno() == Libc.EAGAIN ? :busy : :unknown
-end
-_flock_state(path) = open(_flock, path, "r")
-# The file opened and locked, to hold through the copy; nothing where the system cannot lock. A lock
-# another program took since the file was truncated is an error (the file is then incomplete).
-function _hold_lock(path)
-    io = open(path, "r")
-    state = _flock(io)
-    state === :locked && return io
-    close(io)
-    state === :busy && error("another program opened $(repr(path)) while it was being rewritten")
-    return nothing
 end
 
 # A folder of this save's own in the system's temporary folder, created with a name no other save

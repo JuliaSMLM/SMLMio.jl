@@ -474,20 +474,31 @@ end
             @test isempty(ours())
         end
 
-        @testset "a file another program holds locked is refused before it is touched" begin
-            # HDF5 with file locking on locks a file it opens (flock, shared to read); a program
-            # reading the file is stood in for by a shared lock on a separate open file. With
-            # locking on, HDF5's own recreate found that lock only after truncating the file, and
-            # left it empty (shown outside the suite: locking is set when HDF5 starts)
-            if Sys.isunix()
-                now = read(joinpath(dir, "r.mat"))
-                open(joinpath(dir, "r.mat"), "r") do held
-                    @test ccall(:flock, Cint, (Cint, Cint), fd(held), Cint(1 | 4)) == 0
-                    @test_throws r"open in another program" save_smite(good, dir, "r.mat")
-                end
-                @test read(joinpath(dir, "r.mat")) == now
-                @test isempty(ours())
-            end
+        @testset "a recreate refused after it changed the file says the file is incomplete" begin
+            # With file locking on, HDF5 truncates a file another program holds locked and then
+            # refuses it (shown outside the suite: HDF5 reads its locking setting when it starts).
+            # A refusal that left the file as it was is passed on as it is; one that changed it is
+            # reported as an incomplete file, whatever the file's length then
+            s = Dict{String,Any}("X" => [1.0])
+            now = read(joinpath(dir, "r.mat"))
+            refused(t) = error("unable to lock file")
+            @test_throws r"^unable to lock file$" SMLMio._write_smd(joinpath(dir, "r.mat"), s; recreate=refused)
+            @test read(joinpath(dir, "r.mat")) == now
+            same_length(t) = (write(t, zeros(UInt8, length(now))); error("unable to lock file"))
+            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; recreate=same_length); nothing catch ex; ex end
+            @test err isa ErrorException && occursin("incomplete", err.msg) && occursin("unable to lock", err.msg)
+            @test isempty(ours())
+            save_smite(good, dir, "r.mat")
+        end
+
+        @testset "a new file is created exclusively; a failure removes only a file the save made" begin
+            # A file that appears at the target while a save is staged is an existing file: it is
+            # rewritten in place and kept if the copy fails, never removed
+            p = joinpath(dir, "excl.mat")
+            @test SMLMio._create_new(p) && isfile(p) && filesize(p) == 0
+            @test !SMLMio._create_new(p)
+            rm(p)
+            @test_throws r"cannot be created" SMLMio._create_new(joinpath(dir, "no-such-folder", "x.mat"))
         end
 
         @testset "too little free space is refused before the file is touched" begin

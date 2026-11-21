@@ -87,12 +87,13 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   the file is incomplete, as other errors there say. The guide says that HDF5.jl before 0.16.13
   does not lock its calls, so with those versions the caller must use MAT and HDF5 (loads and
   saves alike) from one thread at a time.
-- `save_smite` asked HDF5 to recreate an existing file before copying the new one in, and HDF5
-  truncates a file before it finds another program's lock on it, so replacing a file another
-  program was reading left it empty, with HDF5's lock error. A file another program (or this
-  session) holds locked is now refused before it is touched; a refusal that comes after truncating
-  says the file is incomplete; and the file stays locked while it is rewritten, so a program
-  opening it meanwhile is refused.
+- `save_smite` asks HDF5 to recreate an existing file before copying the new one in. With HDF5
+  file locking on, HDF5 truncates a file before it finds another program's lock on it, so
+  replacing a file another program had open left it empty with only HDF5's lock error. The file
+  is still emptied (a limit, as in 0.1.0: `save_smite` does not coordinate with other programs
+  using the file), but a refusal that changed the file now says the file is incomplete. A new
+  file is created exclusively after the save is staged, so a file that appeared at the name
+  meanwhile is treated as an existing one, and a failed save removes only a file it created.
 - The final copy ignored how many bytes each write took, so a write cut short without an error
   (a file size limit) reported success and left a file that does not load. Each write must take
   all its bytes and the file must end up as long as the copy; otherwise the error says the file
