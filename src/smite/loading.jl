@@ -152,8 +152,10 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
             c !== nothing && !isempty(c) && push!(mismatched, key)
         end
     end
-    !three_d && _is_ndims3(get(s, "NDims", nothing)) && n > 0 && _smite_length(get(s, "Z", nothing)) == n &&
-        @warn("$where has NDims 3; load_smite_2d leaves out Z (kept in metadata), load_smite_3d loads it")
+    # SMITE writes NDims 2 for its own 3D fits too, so a Z with one value per localization says 3D
+    !three_d && n > 0 && _smite_length(get(s, "Z", nothing)) == n &&
+        @warn("$where has Z for each localization (a 3D fit); load_smite_2d leaves out Z (kept in " *
+              "metadata), load_smite_3d loads it")
     isempty(mismatched) || @warn("$where: $(join(mismatched, ", ")) do not hold one value per " *
         "localization ($n); loaded as their defaults (NaN, or 1 for DatasetNum, 0 for ConnectID), " *
         "raw values kept in metadata")
@@ -344,8 +346,8 @@ load_smite_2d(smd::SmiteSMD; pixel_size=nothing) = _load_smite(smd, false, pixel
 
 Load a 3D SMITE SMD into a [`SmiteSMLD`](@ref) of `Emitter3DFit{Float64}`.
 
-Positions load as in [`load_smite_2d`](@ref); `Z` and `Z_SE` are µm in SMITE and load
-unchanged. The file also needs `Z` and `Z_SE` with one value per localization. SMITE's SMD has
+Positions load as in [`load_smite_2d`](@ref); `Z` and `Z_SE` are µm in SMITE and load in µm,
+as `Float64`. The file also needs `Z` and `Z_SE` with one value per localization. SMITE's SMD has
 no `ZSize`; every `ZSize` a file has stays in the metadata, and one that is one whole number of
 at least 0 that fits an `Int` is also appended to `metadata["data_size"]`. Everything else (optional fields, metadata,
 `pixel_size`, the errors it throws) is as in [`load_smite_2d`](@ref).

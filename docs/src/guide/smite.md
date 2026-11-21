@@ -89,7 +89,9 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   it back, and none is an error: when it is one whole number of at least 0 that fits an `Int`,
   `load_smite_3d` also appends it to `data_size`; any other `ZSize` (several values, text, -1)
   is only kept in the metadata.
-  `load_smite_2d` on a file with `NDims` 3 warns that it leaves `Z` out (kept in the metadata).
+  `load_smite_2d` on a file whose `Z` holds one value per localization warns that it leaves `Z`
+  out (kept in the metadata); SMITE writes `NDims` 2 for its own 3D fits, so `NDims` does not
+  say whether a file is 3D.
 - **Rows or columns.** An SMD built by hand in MATLAB with row vectors loads like SMITE's
   columns.
 - **Cells of numbers.** A per-localization field stored as a MATLAB cell of numbers (single
@@ -196,7 +198,8 @@ again once the cause is fixed. It contains:
   longer has one value per file row is dropped with a warning too. These fields are written by
   row because `metadata["smite_per_localization_fields"]` lists them; deleting that list makes
   `save_smite` write them as ordinary metadata, and after a filter they then no longer match the
-  localizations.
+  localizations (except `Z` and `Z_SE`, which are then matched by the emitters' ids, as for data
+  not loaded by SMLMio, above).
 - a field SMITE stacks per localization that is not listed in
   `metadata["smite_per_localization_fields"]` (the file held it with other than one value per
   row, often one per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files; or

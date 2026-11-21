@@ -160,7 +160,7 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
     @testset "load_smite_2d on a 3D file says it leaves out Z" begin
         mktempdir() do dir
             smd = write_smd(dir, "three.mat", smite_smd_3d(3))
-            @test_logs (:warn, r"NDims 3.*load_smite_3d") load_smite_2d(smd)
+            @test_logs (:warn, r"Z for each localization.*load_smite_3d") load_smite_2d(smd)
             smld = quiet(() -> load_smite_2d(smd))
             @test smld.emitters[1] isa Emitter2DFit
             @test haskey(smld.metadata, "Z")
@@ -299,7 +299,7 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             # SMITE writes NDims 2 for its 3D fits too (FindROI sets it; the fit adds Z and Z_SE):
             # the file's populated Z makes a save 3D, with or without localizations
             s3 = smite_smd_3d(2); s3["NDims"] = 2.0
-            smld = load_smite_2d(write_smd(dir, "xyznb.mat", s3))
+            smld = @test_logs (:warn, r"Z for each localization") load_smite_2d(write_smd(dir, "xyznb.mat", s3))
             for keep in ([1], Int[])
                 sel = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[keep], smld.camera,
                                                                 smld.n_frames, smld.n_datasets, smld.metadata)
@@ -675,11 +675,21 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test isempty(matread(joinpath(dir, "b-text.mat"))["SMD"]["ConnectID"])
             @test SMLMio._smite_scalar("f", Dict{String,Any}("PixelSize" => ""), "PixelSize") === nothing
             @test SMLMio._smite_scalar("f", Dict{String,Any}("XSize" => zeros(0, 0)), "XSize") === nothing
-            read = Dict{String,Any}("PValue" => "", "Z" => "", "X" => "", "PixelSize" => "",
-                                    "NFrames" => "", "Comment" => "", "Label" => "x")
-            SMLMio._smite_empty_text!(read)
-            @test all(k -> read[k] == zeros(0, 0), ("PValue", "Z", "X", "PixelSize", "NFrames"))
-            @test read["Comment"] == "" && read["Label"] == "x"
+            fields = Dict{String,Any}("PValue" => "", "Z" => "", "X" => "", "PixelSize" => "",
+                                      "NFrames" => "", "Comment" => "", "Label" => "x")
+            SMLMio._smite_empty_text!(fields)
+            @test all(k -> fields[k] == zeros(0, 0), ("PValue", "Z", "X", "PixelSize", "NFrames"))
+            @test fields["Comment"] == "" && fields["Label"] == "x"
+            # End to end: a file without localizations whose fields are empty char fields loads
+            # with no localizations and saves again (MAT 0.10 and 0.11 read them as empty text)
+            s0 = smite_smd_3d(0)
+            for k in ("X", "Y", "FrameNum", "Z", "Z_SE", "PValue", "ConnectID")
+                s0[k] = ""
+            end
+            smld0 = load_smite_3d(write_smd(dir, "emptychar.mat", s0))
+            @test isempty(smld0.emitters)
+            save_smite(smld0, dir, "emptychar-saved.mat")
+            @test isempty(load_smite_3d(SmiteSMD(dir, "emptychar-saved.mat")).emitters)
             # A per-dataset value is not one per localization: the saved column is the NaN that
             # loaded, never the per-dataset numbers, which a later load could take for
             # per-localization uncertainties.

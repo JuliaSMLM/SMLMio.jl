@@ -757,9 +757,12 @@ end
         # save of the saved file's load agrees with the first save
         twice(name, mdict) = begin
             save_smite(sm([e2, e2]; md=mdict), dir, name)
-            first = matread(joinpath(dir, name))["SMD"]
-            save_smite(load_smite_2d(SmiteSMD(dir, name)), dir, "again-" * name)
-            first, matread(joinpath(dir, "again-" * name))["SMD"]
+            once = matread(joinpath(dir, name))["SMD"]
+            # (the load warns that it leaves out Z, which the file now holds for each localization)
+            back = Base.CoreLogging.with_logger(() -> load_smite_2d(SmiteSMD(dir, name)),
+                                                Base.CoreLogging.NullLogger())
+            save_smite(back, dir, "again-" * name)
+            once, matread(joinpath(dir, "again-" * name))["SMD"]
         end
         for (a, b) in (twice("mdz.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2])),
                        twice("mdz3.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2], "NDims" => 3.0)))
