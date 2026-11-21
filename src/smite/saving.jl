@@ -172,30 +172,43 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         end
     end
 
-    # Z and Z_SE that load_smite_2d kept from a 3D file, listed with one value per file row, are
-    # written for these 2D emitters' rows through the same writer as the emitters' z, both or
-    # neither (a value that is not a number drops them with a warning); the file then says NDims 3
-    # when both are written and it has localizations or its NDims was 3. When the emitters' own Z
-    # was not saved (lostz), metadata Z and Z_SE are not saved at all.
-    zkeys = zcols === nothing && !lostz ? filter(k -> k in towrite, ["Z", "Z_SE"]) : String[]
+    # Z and Z_SE in the metadata with one value per saved emitter: for data loaded from SMITE, the
+    # listed per-localization fields, by row (load_smite_2d keeps them from a 3D file); for other
+    # data (built by hand, or loaded by SMLMData 0.7.1, which kept a 3D file's Z with no list),
+    # fields with as many values as there are emitters. On 2D emitters they are written through
+    # the same writer as the emitters' z, so a save and a later save of its load agree; a value
+    # that is not a number drops them with a warning. The file says NDims 3 when both are written
+    # and it has localizations, the loaded file's Z had values (SMITE writes NDims 2 for its 3D
+    # fits too) or the metadata's NDims is 3. When the emitters' own Z was not saved (lostz),
+    # metadata Z and Z_SE are not saved at all.
+    loaded = haskey(md, "smite_per_localization_fields")
+    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "emitter", 1:n, n > 0
+    if zcols === nothing && !lostz
+        if loaded
+            zkeys = filter(k -> k in towrite, ["Z", "Z_SE"])
+            zsrc = [_smite_vec(md[k])[rows] for k in zkeys]
+            zunit, zids, zhad = "file row", rows, any(k -> _smite_length(md[k]) > 0, zkeys)
+        else
+            zkeys = filter(k -> haskey(md, k) && _smite_length(md[k]) == n, ["Z", "Z_SE"])
+            zsrc = [_smite_vec(md[k]) for k in zkeys]
+        end
+    end
     mdz = Dict{String,Any}()
     if !isempty(zkeys)
-        conv = _z_columns(zkeys, [_smite_vec(md[k])[rows] for k in zkeys], "file row", rows)
+        conv = _z_columns(zkeys, zsrc, zunit, zids)
         if conv === nothing
             @warn("save_smite: $(join(zkeys, ", ")) not saved: they hold values that are not numbers")
         else
             foreach((k, c) -> mdz[k] = c, zkeys, conv)
         end
     end
-    ndims3_from_md = length(mdz) == 2 && (n > 0 || _is_ndims3(get(md, "NDims", nothing)))
+    ndims3_from_md = length(mdz) == 2 && (n > 0 || zhad || _is_ndims3(get(md, "NDims", nothing)))
 
     # Add any additional fields from metadata, except the loaders' own entries. For data loaded
     # from SMITE, a field SMITE stacks per localization that is not listed as one value per file
     # row (the file held it otherwise, often one value per dataset, or it was added after loading)
     # is dropped when the saved localizations are as many as its values, since a load would take
     # it for one value per localization; with another count it is written as it is.
-    loaded = haskey(md, "smite_per_localization_fields")
-    nsaved = length(smld.emitters)
     ambiguous = String[]
     for (key, value) in md
         (key in _SMITE_LOADER_KEYS || haskey(s, key)) && continue
@@ -208,7 +221,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
             # Every other field keeps its MATLAB class: SMITE's IndSMD is a cell, one entry per
             # localization, and ThreshFlag is uint32
             value = _smite_vec(value)[rows]
-        elseif loaded && key in _SMITE_STACKABLE && nsaved > 0 && _smite_length(value) == nsaved
+        elseif loaded && key in _SMITE_STACKABLE && n > 0 && _smite_length(value) == n
             push!(ambiguous, key)
             continue
         end

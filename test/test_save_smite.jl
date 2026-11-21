@@ -732,10 +732,29 @@ end
             smd = matread(joinpath(dir, f))["SMD"]
             @test !haskey(smd, "Z") && !haskey(smd, "Z_SE") && smd["NDims"] == 2
         end
-        # On 2D emitters, metadata Z and Z_SE not loaded from a SMITE file are ordinary metadata:
-        # written as given, and the file stays 2D
-        save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => Any["bad", 2.0], "Z_SE" => [0.1, 0.2])), dir, "mdz.mat")
-        smd = matread(joinpath(dir, "mdz.mat"))["SMD"]
-        @test smd["NDims"] == 2 && smd["Z"] == Any["bad", 2.0]
+        # On 2D emitters, metadata Z and Z_SE with one value per emitter (an SMLD built by hand, or
+        # one SMLMData 0.7.1 loaded from a 3D file) are written as the emitters' z would be, and a
+        # save of the saved file's load agrees with the first save
+        twice(name, mdict) = begin
+            save_smite(sm([e2, e2]; md=mdict), dir, name)
+            first = matread(joinpath(dir, name))["SMD"]
+            save_smite(load_smite_2d(SmiteSMD(dir, name)), dir, "again-" * name)
+            first, matread(joinpath(dir, "again-" * name))["SMD"]
+        end
+        for (a, b) in (twice("mdz.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2])),
+                       twice("mdz3.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2], "NDims" => 3.0)))
+            @test a["NDims"] == 3 && b["NDims"] == 3
+            @test vec(a["Z"]) == vec(b["Z"]) == [0.25, 0.5]
+        end
+        # (the first save drops them with a warning, so the saved file has none to drop again)
+        a, b = @test_logs (:warn, r"Z, Z_SE not saved") twice(
+            "mdzbad.mat", Dict{String,Any}("Z" => Any["bad", 2.0], "Z_SE" => [0.1, 0.2]))
+        @test !haskey(a, "Z") && !haskey(b, "Z") && a["NDims"] == b["NDims"] == 2
+        @test_throws r"Z of emitter 1 is 9007199254740993" save_smite(
+            sm([e2, e2]; md=Dict{String,Any}("Z" => Int64[2^53 + 1, 1], "Z_SE" => [0.1, 0.2])), dir, "mdzbig.mat")
+        # Metadata Z of another length is ordinary metadata, written as given; the file stays 2D
+        save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => [1.0, 2.0, 3.0])), dir, "mdz3rows.mat")
+        smd = matread(joinpath(dir, "mdz3rows.mat"))["SMD"]
+        @test smd["NDims"] == 2 && vec(smd["Z"]) == [1.0, 2.0, 3.0]
     end
 end

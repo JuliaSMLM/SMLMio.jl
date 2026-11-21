@@ -289,6 +289,16 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
                 smld, dir, "zbad-saved.mat")
             saved = matread(joinpath(dir, "zbad-saved.mat"))["SMD"]
             @test !haskey(saved, "Z") && !haskey(saved, "Z_SE") && saved["NDims"] == 2
+            # SMITE writes NDims 2 for its 3D fits too (FindROI sets it; the fit adds Z and Z_SE):
+            # the file's populated Z makes a save 3D, with or without localizations
+            s3 = smite_smd_3d(2); s3["NDims"] = 2.0
+            smld = load_smite_2d(write_smd(dir, "xyznb.mat", s3))
+            for keep in ([1], Int[])
+                sel = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[keep], smld.camera,
+                                                                smld.n_frames, smld.n_datasets, smld.metadata)
+                save_smite(sel, dir, "xyznb-saved.mat")
+                @test matread(joinpath(dir, "xyznb-saved.mat"))["SMD"]["NDims"] == 3
+            end
             # A selection of no localizations from a 3D file loaded in 2D stays 3D
             smld = quiet(() -> load_smite_2d(write_smd(dir, "z3e.mat", smite_smd_3d(2))))
             none = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[Int[]], smld.camera,
