@@ -18,8 +18,9 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   the loader no longer stands in for a `PixelSize` of several values or text. A `FrameNum`,
   `DatasetNum` or `ConnectID` value too large for an `Int` is an `ArgumentError`, not an
   `InexactError`. In 3D, `ZSize` (which SMITE does not write) now stays in the metadata, so a
-  save and load keeps it, and is never an error: one whole number of at least 0 is appended to
-  `data_size`, anything else is only kept (0.1.0 refused a `ZSize` that was not whole).
+  save and load keeps it, and is never an error: one whole number of at least 0 that fits an
+  `Int` is appended to `data_size`, anything else is only kept (0.1.0 refused a `ZSize` that was
+  not whole).
 - `save_smite` wrote `n_frames`, `n_datasets` and each emitter's `frame`, `dataset` and
   `track_id` as doubles without checking them, so a value a double cannot hold exactly was saved
   rounded, and values the loaders refuse (a negative `n_frames`, a frame of 2.5) were written.

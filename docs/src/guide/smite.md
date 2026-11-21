@@ -86,9 +86,9 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   `PixelSize`, `XSize`, `YSize`, `NFrames` or `NDatasets` of several values, saying how many the
   file holds; a `pixel_size` passed to the loader does not stand in for such a `PixelSize`.
 - **3D.** SMITE's SMD has no `ZSize`. Every `ZSize` stays in the metadata, so `save_smite` writes
-  it back, and none is an error: when it is one whole number of at least 0, `load_smite_3d` also
-  appends it to `data_size`; any other `ZSize` (several values, text, -1) is only kept in the
-  metadata.
+  it back, and none is an error: when it is one whole number of at least 0 that fits an `Int`,
+  `load_smite_3d` also appends it to `data_size`; any other `ZSize` (several values, text, -1)
+  is only kept in the metadata.
   `load_smite_2d` on a file with `NDims` 3 warns that it leaves `Z` out (kept in the metadata).
 - **Rows or columns.** An SMD built by hand in MATLAB with row vectors loads like SMITE's
   columns.
@@ -100,8 +100,9 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
 - **Complex values.** Localizations with a non-zero imaginary part in any position, photon or
   background field are dropped with a warning.
 - **Number types.** Positions, photons, background and their uncertainties load as `Float64`,
-  whatever the file stores; an integer above 2^53 in one of these fields (possible only in a
-  hand-built file) loads rounded. Frames, datasets and track ids load as `Int`, exactly.
+  whatever the file stores; an integer above 2^53 in one of these fields (in a hand-built file,
+  or one 0.1.0 wrote from integer data) can load rounded. Frames, datasets and track ids load as
+  `Int`, exactly.
 
 ## Saving
 
@@ -119,9 +120,9 @@ A missing folder, a folder (or anything but a file) of the file's name, a symlin
 name that is no file, an existing file you may not write, too little free space to rewrite one
 (where the system reports it), a camera whose pixels are not uniform and square or that the
 loaders could not build back (no pixels along an axis, edges that do not strictly increase, a
-pixel size that is not finite as written, or `Float32` edges that round onto each other), and metadata keys that are not MATLAB names (an ASCII letter, then up
-to 62 letters, digits or underscores; Dict values and arrays of Dicts need such string keys) are
-each an
+pixel size that is not finite as written, or `Float32` edges that round onto each other), and
+metadata keys that are not MATLAB names (an ASCII letter, then up to 62 letters, digits or
+underscores; Dict values and arrays of Dicts need such string keys) are each an
 `ArgumentError` naming what is wrong, and nothing is written.
 
 The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the loaders read. It
