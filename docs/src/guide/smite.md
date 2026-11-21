@@ -138,7 +138,9 @@ The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the load
 holds no `SMF`, so SMITE tools that also load an `SMF` need one from the original results file.
 The file is written in full to a temporary file in the system's temporary folder (`tempdir()`,
 which `TMPDIR` sets on Linux and macOS; it must exist and have room for one copy) and only then
-copied into place. So a save that fails while writing (MAT
+copied into place. Each save has its own temporary file, so saves of different files can run at
+once on several threads (with HDF5.jl 0.14, the oldest MAT allows, HDF5 itself is not safe to use
+from several threads at once). A save that fails while writing (MAT
 refusing a value, the file held open by HDF5 in the same session) leaves an existing file as it
 was and creates none. An existing file keeps its owner, permissions and links, as with a direct
 write (for a symlink, the file it points to is rewritten). An error during the final copy (a full

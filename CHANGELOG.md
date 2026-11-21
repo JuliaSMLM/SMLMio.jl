@@ -78,6 +78,10 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   holding an unfilled cell element still cannot be saved.
 - `load_smite_2d` warned that it leaves `Z` out only for a file marked `NDims` 3, but SMITE marks
   its own 3D fits `NDims` 2; it now warns when `Z` and `Z_SE` hold one number per localization.
+- `save_smite` named its temporary file from the clock, so saves running at once on several
+  threads could share one: a save failed, or wrote another save's data, and an existing target
+  could lose its contents. Each save now has its own temporary file (a counter all threads
+  share).
 
 ## 0.1.0 (2026-11-16)
 

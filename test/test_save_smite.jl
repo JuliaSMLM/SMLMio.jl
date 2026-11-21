@@ -425,6 +425,15 @@ end
 
         # The temporary copies live in the system's temporary folder: none may be left there
         ours() = filter(startswith("smlmio-$(getpid())-"), readdir(tempdir()))
+        @testset "saves running at once never share a temporary file" begin
+            # Named from a counter all threads share, not the clock, which two saves on different
+            # threads can read at the same nanosecond
+            names = fill("", 256)
+            Threads.@threads for i in eachindex(names)
+                names[i] = SMLMio._tmp_path()
+            end
+            @test allunique(names) && all(startswith(joinpath(tempdir(), "smlmio-$(getpid())-")), names)
+        end
         @testset "a new file whose write fails is not left behind" begin
             @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "new.mat")
             @test readdir(dir) == ["r.mat"]

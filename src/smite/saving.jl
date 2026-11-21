@@ -281,7 +281,7 @@ function _write_smd(target::String, s; copy=_copy_into)
                                 Libc.strerror(e.errnum)))
         end
     end
-    tmp = joinpath(tempdir(), string("smlmio-", getpid(), "-", time_ns(), ".tmp"))
+    tmp = _tmp_path()
     try
         matwrite(tmp, Dict("SMD" => s))
         if existed
@@ -305,6 +305,12 @@ function _write_smd(target::String, s; copy=_copy_into)
     end
     return nothing
 end
+
+# A temporary file name no other save of this process uses, also when saves run at once on
+# several threads (a name from the clock could be the same for two of them): the process id and
+# a counter all threads share.
+const _TMP_SEQ = Threads.Atomic{Int}(0)
+_tmp_path() = joinpath(tempdir(), string("smlmio-", getpid(), "-", Threads.atomic_add!(_TMP_SEQ, 1), ".tmp"))
 
 # Copies the file `src` into `dst` in place (truncating it, or creating it).
 function _copy_into(src, dst)
@@ -503,9 +509,9 @@ end
 _exact_sub(a::Complex, b::Real) = complex(_exact_sub(real(a), b), _float64(imag(a)))
 
 # x as (numerator, denominator), BigInts with the denominator positive, exactly
-_fraction(x::Integer) = (BigInt(x), big(1))
-_fraction(x::Rational) = (BigInt(numerator(x)), BigInt(denominator(x)))
-# x == s * 2^e / d, with d = ±1 for a finite binary float: the sign is in d
+_fraction(x::Union{Integer,Rational}) = (BigInt(numerator(x)), BigInt(denominator(x)))
+# A finite binary float through Base.decompose (internal, but exact: Rational{BigInt} of a
+# BigFloat rounds at BigFloat's working precision): x == s * 2^e / d with d = ±1, the sign in d
 function _fraction(x::AbstractFloat)
     s, e, d = Base.decompose(x)
     n = BigInt(s) * sign(d)
