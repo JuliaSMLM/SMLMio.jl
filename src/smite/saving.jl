@@ -74,21 +74,23 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # SMITE has one PixelSize, so the camera must be the one the loaders will build from XSize,
     # YSize and the written pixel size (single for a Float32 camera, so the file loads back with a
     # Float32 camera; otherwise double): each edge, relative to the camera's first, within a
-    # thousandth of a pixel of the rebuilt camera's. Differences of edges are taken exactly (in
-    # BigFloat or BigInt, so a small integer or Float16 type neither overflows nor rounds) and
-    # compared in Float64.
+    # thousandth of a pixel of the rebuilt camera's. Differences of edges are taken exactly
+    # (_exact_sub: no overflow in a small integer type, no rounding in Float16, whatever BigFloat's
+    # working precision) and compared in Float64.
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
     nx, ny = length(ex) - 1, length(ey) - 1
     nx >= _SMITE_COUNT_MIN["XSize"] && ny >= _SMITE_COUNT_MIN["YSize"] || throw(ArgumentError(
         "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must be at least " *
         "$(_SMITE_COUNT_MIN["XSize"]) and $(_SMITE_COUNT_MIN["YSize"])"))
+    all(isfinite, ex) && all(isfinite, ey) ||
+        throw(ArgumentError("save_smite: the camera's pixel edges are not all finite"))
     x0, y0 = ex[1], ey[1]
-    px = big(ex[2]) - big(ex[1])
-    pxw = _smite_pixel_size("save_smite", "the camera's pixel size", eltype(ex) === Float32 ? Float32(px) : Float64(px))
+    px = _exact_sub(ex[2], ex[1])
+    pxw = _smite_pixel_size("save_smite", "the camera's pixel size", eltype(ex) === Float32 ? Float32(px) : px)
     rebuilt = _smite_camera("save_smite", nx, ny, pxw)
     pxf = Float64(pxw)
-    same(edges, e0, re) = all(k -> abs(Float64(big(edges[k]) - big(e0)) - Float64(re[k])) <= pxf / 1000,
+    same(edges, e0, re) = all(k -> abs(_exact_sub(edges[k], e0) - Float64(re[k])) <= pxf / 1000,
                               eachindex(edges))
     same(ex, x0, rebuilt.pixel_edges_x) && same(ey, y0, rebuilt.pixel_edges_y) ||
         throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels are " *
@@ -410,7 +412,7 @@ end
 # + 0.5, or an uncertainty (`origin` nothing) X_SE = σ / px, each from the value as checked by
 # _mat_column, in Float64 (ComplexF64 for complex values) and then single when the emitters'
 # column is all Float32. The origin is subtracted exactly when it is not itself a double (a
-# BigFloat edge). A finite value whose pixel value the loaders would read back as infinite, or an
+# BigFloat edge, _exact_sub). A finite value whose pixel value the loaders would read back as infinite, or an
 # uncertainty that would read back as 0 when it is not, is an ArgumentError naming the emitter.
 function _pixel_column(what, col, origin, px)
     own = _mat_column(what, col)
@@ -420,7 +422,7 @@ function _pixel_column(what, col, origin, px)
     elseif Float64(origin) == origin
         T[(T(v) - Float64(origin)) / px + 0.5 for v in own]
     else
-        T[T(big(v) - origin) / px + 0.5 for v in own]
+        T[_exact_sub(v, origin) / px + 0.5 for v in own]
     end
     out = eltype(own) === Float32 ? Float32.(vals) : vals
     back(X) = origin === nothing ? X * px : (X - 0.5) * px      # as the loaders compute (px a Float64)
@@ -453,6 +455,18 @@ function _smite_metadata(md)
     end
     return _smite_empty_text!(out)
 end
+
+# a - b exactly, rounded once to a Float64 (a ComplexF64 for a complex a), whatever BigFloat's
+# working precision: finite real values are subtracted as rationals, with BigFloat set wide
+# enough for every conversion to be exact; a value that is not finite is subtracted in Float64.
+function _exact_sub(a::Real, b::Real)
+    (isfinite(a) && isfinite(b)) || return Float64(a) - Float64(b)
+    bits(x) = x isa BigFloat ? precision(x) : 0
+    setprecision(BigFloat, 2 * max(256, bits(a), bits(b))) do
+        Float64(Rational{BigInt}(a) - Rational{BigInt}(b))
+    end
+end
+_exact_sub(a::Complex, b::Real) = complex(_exact_sub(real(a), b), Float64(imag(a)))
 
 # A count or index as a MATLAB double, by the loaders' rule (_fits_int, _SMITE_COUNT_MIN) so that
 # every file save_smite writes loads: a whole number in Int's range, at least `lo`, that a double

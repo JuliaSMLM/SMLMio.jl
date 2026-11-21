@@ -50,7 +50,8 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   computed in `Float64` from the written pixel size, where a `Float32` camera rounded them, and
   each finite one must load back finite (a non-zero uncertainty also not as 0); `save_smite`
   refuses a camera whose edges are not, within a thousandth of a pixel, those its loaders rebuild
-  from the written pixel size, edges subtracted exactly (the check rounded in the camera's own
+  from the written pixel size, edges subtracted exactly whatever BigFloat's working precision
+  (the check rounded in the camera's own
   type, so a `Float32` camera far from the origin or a `Float16` one passed and loaded back with
   other edges, and an integer grid could overflow), or that they
   could not build back (no pixels along an axis, a pixel size that is not finite as written,

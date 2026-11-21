@@ -713,6 +713,18 @@ end
         @test_logs (:warn, r"first pixel edge is at") save_smite(SMLMCore.BasicSMLD([e8], int8, 1, 1), dir, "int8.mat")
         smd = matread(joinpath(dir, "int8.mat"))["SMD"]
         @test smd["XSize"] == 200 && smd["YSize"] == 1 && smd["PixelSize"] === 1.0 && smd["X"] === 50.5
+        # The exact differences do not depend on BigFloat's working precision: a Float64 camera
+        # away from 0 keeps its pitch, and a BigFloat origin its position, at 24 bits too
+        cam64 = IdealCamera([10000.0, 10000.1], [10000.0, 10000.1])
+        setprecision(BigFloat, 24) do
+            @test_logs (:warn, r"first pixel edge") save_smite(SMLMCore.BasicSMLD([em], cam64, 1, 1), dir, "p24.mat")
+            @test_logs (:warn, r"first pixel edge") save_smite(
+                AnyCountSMLD([_anyloc(x=Float64(2)^53 + 2)], camb, 1, 1, Dict{String,Any}()), dir, "bigorigin24.mat")
+        end
+        @test matread(joinpath(dir, "p24.mat"))["SMD"]["PixelSize"] === 10000.1 - 10000.0
+        @test matread(joinpath(dir, "bigorigin24.mat"))["SMD"]["X"] === 1.5
+        @test_throws r"pixel edges are not all finite" save_smite(
+            SMLMCore.BasicSMLD([em], IdealCamera([0.0, Inf], [0.0, 1.0]), 1, 1), dir, "infedge.mat")
         # A large Float32 camera at 0 is rebuilt exactly, and saves
         save_smite(SMLMCore.BasicSMLD([em], IdealCamera(4096, 4096, 0.1f0), 1, 1), dir, "big32.mat")
         @test load_smite_2d(SmiteSMD(dir, "big32.mat")).camera.pixel_edges_x == IdealCamera(4096, 4096, 0.1f0).pixel_edges_x

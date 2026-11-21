@@ -122,7 +122,8 @@ A missing folder, a folder (or anything but a file) of the file's name, a symlin
 name that is no file, an existing file you may not write, too little free space to rewrite one
 (where the system reports it), a camera whose pixels are not uniform and square (its edges,
 relative to its first, are not within a thousandth of a pixel of those the loaders rebuild from
-`XSize`, `YSize` and the written `PixelSize`, the differences of edges taken exactly) or that
+`XSize`, `YSize` and the written `PixelSize`, the differences of edges taken exactly), whose
+edges are not all finite, or that
 the loaders could not build back (no pixels along an axis, a first pixel of zero or negative
 width, a pixel size that is not finite as written, or `Float32` edges that round onto each
 other), and
