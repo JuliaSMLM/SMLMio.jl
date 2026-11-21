@@ -791,6 +791,12 @@ end
             sm([f(1, 5), f(2, 6)]; md=Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2])), dir, "noid.mat")
         smd = matread(joinpath(dir, "noid.mat"))["SMD"]
         @test !haskey(smd, "Z") && smd["NDims"] == 2
+        # A tuple in the metadata is the array it holds
+        save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => (0.25, 0.5), "Z_SE" => [0.1, 0.2])), dir, "tup.mat")
+        smd = matread(joinpath(dir, "tup.mat"))["SMD"]
+        @test smd["NDims"] == 3 && vec(smd["Z"]) == [0.25, 0.5]
+        @test_throws r"Z of metadata row 1 is 9007199254740993" save_smite(
+            sm([e2, e2]; md=Dict{String,Any}("Z" => (Int64(2)^53 + 1, 1), "Z_SE" => [0.1, 0.2])), dir, "tupbig.mat")
         # Metadata Z of another length is ordinary metadata, written as given; the file stays 2D
         save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => [1.0, 2.0, 3.0])), dir, "mdz3rows.mat")
         smd = matread(joinpath(dir, "mdz3rows.mat"))["SMD"]

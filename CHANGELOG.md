@@ -63,7 +63,9 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   save of its load agree, and each `z` stays with its localization;
   the file says `NDims` 3 when both are written and it has localizations, its `Z` had values
   (SMITE writes `NDims` 2 for its 3D fits) or the metadata's `NDims` is 3. Every other
-  per-localization field keeps its MATLAB class (SMITE's `IndSMD` stays a cell).
+  per-localization field keeps its MATLAB class (SMITE's `IndSMD` stays a cell); an unfilled
+  cell element, which MAT reads as an array it cannot write, is written as an empty double
+  array (0.1.0 failed to save such a file). A tuple in the metadata counts as the array it holds.
 
 ## 0.1.0 (2026-11-16)
 

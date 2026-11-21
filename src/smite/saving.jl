@@ -240,7 +240,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
             push!(ambiguous, key)
             continue
         end
-        s[key] = value
+        s[key] = _mat_writable(value)
     end
     isempty(ambiguous) || @warn("save_smite: $(join(sort!(ambiguous), ", ")) not saved: SMITE stores these " *
         "per localization, they are not listed in smite_per_localization_fields as one value per file " *
@@ -434,6 +434,14 @@ function _pixel_column(what, col, origin, px)
         "hold so that it loads back; nothing was written"))
     return out
 end
+
+# MAT reads an unfilled element of a MATLAB cell as an empty array of element type Union{}, which
+# its writer refuses; such an element is written as an empty double array, as SMITE holds an empty
+# field. Cells (arrays holding arrays) are searched, and keep their shape and other elements.
+_mat_writable(v::AbstractArray{Union{}}) = zeros(size(v))
+_mat_writable(v::AbstractArray) =
+    eltype(v) <: Number || !any(x -> x isa AbstractArray, v) ? v : map(_mat_writable, v)
+_mat_writable(v) = v
 
 # The rows of a metadata field of `m` values that belong to `emitters`, for data not loaded by
 # SMLMio: each emitter's id when every id is a distinct row of the field (SMLMData 0.7.1 set id to

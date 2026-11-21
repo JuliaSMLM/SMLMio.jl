@@ -266,6 +266,13 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             saved = matread(joinpath(dir, "indsmd-saved.mat"))["SMD"]
             @test saved["IndSMD"] isa AbstractArray{Any} && vec(saved["IndSMD"]) == Any[1.0, 4.0]
             @test eltype(saved["ThreshFlag"]) == UInt32
+            # An unfilled cell element, which MAT reads as an empty array of element type Union{}
+            # and cannot write, is written as an empty double array; the cell keeps its shape
+            smld.metadata["IndSMD"] = Any[Matrix{Union{}}(undef, 0, 0), [2.0, 3.0], 4.0]
+            save_smite(kept, dir, "indsmd-empty.mat")
+            saved = matread(joinpath(dir, "indsmd-empty.mat"))["SMD"]
+            @test saved["IndSMD"] isa AbstractArray{Any} && length(saved["IndSMD"]) == 2
+            @test isempty(saved["IndSMD"][1]) && saved["IndSMD"][2] == 4.0
             # NDims 3 only when Z and Z_SE are both written, so the file loads in 3D
             s3 = smite_smd_3d(2)
             smld = quiet(() -> load_smite_2d(write_smd(dir, "zse.mat", s3)))

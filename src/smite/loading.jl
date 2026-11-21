@@ -13,10 +13,12 @@ end
 
 # MAT reads a 1x1 field as a scalar and an empty field as a 0x0 matrix.
 _smite_length(v::AbstractArray) = length(v)
+_smite_length(v::Tuple) = length(v)      # metadata built in Julia may hold a tuple
 _smite_length(::Number) = 1
 _smite_length(_) = -1
 _smite_vec(v::AbstractArray) = vec(v)
 _smite_vec(v::Number) = [v]
+_smite_vec(v::Tuple) = collect(v)
 
 # A per-localization field as a vector of numbers, or nothing when it is not numeric. MAT reads a
 # MATLAB cell of numbers (single and double values together, say) as an array of Any; its values
