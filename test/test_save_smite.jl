@@ -2,7 +2,7 @@
 # SMITE's pixels and expect the camera fields (XSize, YSize, PixelSize, NDims) in each saved file.
 using SMLMio, Test
 using SMLMCore: SMLMCore, IdealCamera, Emitter2DFit, Emitter3DFit, emitter_ndims
-using MAT: matread, matwrite, matopen
+using MAT: MAT, matread, matwrite, matopen
 
 mutable struct ForeignEmitter3DFit{T} <: SMLMCore.AbstractEmitter   # for save_smite
     x::T; y::T; z::T; photons::T; bg::T; σ_x::T; σ_y::T; σ_z::T; σ_photons::T; σ_bg::T
@@ -809,6 +809,13 @@ end
         back = load_smite_3d(SmiteSMD(dir, "given.mat"))
         @test [(e.frame, e.z) for e in back.emitters] == [(10, 0.25), (20, 0.5)]
         @test vec(matread(joinpath(dir, "given.mat"))["SMD"]["PValue"]) == [0.9, 0.8]
+        # The warning names only what is written from the metadata: FrameNum and Photons_SE are
+        # written from the emitters, and their metadata values are not saved
+        stale = Dict{String,Any}("FrameNum" => [7.0, 8.0], "Photons_SE" => [1.0, 2.0], "PValue" => [0.1, 0.2])
+        @test_logs (:warn, r"^save_smite: PValue written in the order given") save_smite(
+            sm([f(1, 1), f(2, 2)]; md=stale), dir, "stale.mat")
+        smd = matread(joinpath(dir, "stale.mat"))["SMD"]
+        @test vec(smd["FrameNum"]) == [1.0, 2.0] && vec(smd["Photons_SE"]) == [50.0, 50.0]
         @test_logs save_smite(sm([f(1, 1), f(3, 3)]; md=Dict{String,Any}("Z" => [0.25, 0.5, 0.75])), dir, "rows3.mat")
         smd = matread(joinpath(dir, "rows3.mat"))["SMD"]
         @test smd["NDims"] == 2 && vec(smd["Z"]) == [0.25, 0.5, 0.75]
@@ -823,5 +830,41 @@ end
         save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => [1.0, 2.0, 3.0])), dir, "mdz3rows.mat")
         smd = matread(joinpath(dir, "mdz3rows.mat"))["SMD"]
         @test smd["NDims"] == 2 && vec(smd["Z"]) == [1.0, 2.0, 3.0]
+    end
+end
+
+@testset "save_smite keeps the MATLAB class of other metadata" begin
+    mktempdir() do dir
+        e = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+        cam = IdealCamera(1:8, 1:8, 0.1)
+        # A cell of structs stays a cell (MATLAB code indexes it with {i}), whether or not its
+        # structs share their fields (SMITE's catSMD can leave such a cell), saved and saved again
+        same = Any[Dict{String,Any}("gain" => 1.0), Dict{String,Any}("gain" => 2.0)]
+        other = Any[Dict{String,Any}("gain" => 1.0), Dict{String,Any}("offset" => 2.0)]
+        md = Dict{String,Any}("Top" => same, "Extra" => Dict{String,Any}("same" => same, "other" => other))
+        save_smite(SMLMCore.BasicSMLD([e], cam, 1, 1, md), dir, "cells.mat")
+        save_smite(load_smite_2d(SmiteSMD(dir, "cells.mat")), dir, "cells2.mat")
+        for f in ("cells.mat", "cells2.mat")
+            r = matread(joinpath(dir, f))["SMD"]
+            @test r["Top"] isa Array{Any} && r["Extra"]["same"] isa Array{Any} && r["Extra"]["other"] isa Array{Any}
+            @test [d["gain"] for d in vec(r["Top"])] == [1.0, 2.0] && vec(r["Extra"]["other"])[2]["offset"] == 2.0
+        end
+        # Metadata that needs no change is written as it is; a cell with an unfilled element is a
+        # copy with that element made an empty double array, still a cell, and the caller's is kept
+        @test SMLMio._mat_writable(same) === same && SMLMio._mat_writable(md) === md
+        unfilled = Any[Matrix{Union{}}(undef, 0, 0), Dict{String,Any}("g" => 1.0)]
+        w = SMLMio._mat_writable(unfilled)
+        @test w isa Vector{Any} && w[1] == zeros(0, 0) && w[2] === unfilled[2]
+        @test unfilled[1] isa Matrix{Union{}}
+        # A MATLAB class object (MAT 0.12 and later read one as a MatlabClassObject) keeps its class
+        if isdefined(MAT, :MatlabClassObject)
+            obj = MAT.MatlabClassObject(Dict{String,Any}("v" => 1.0), "myclass")
+            save_smite(SMLMCore.BasicSMLD([e], cam, 1, 1, Dict{String,Any}("Obj" => obj)), dir, "obj.mat")
+            save_smite(load_smite_2d(SmiteSMD(dir, "obj.mat")), dir, "obj2.mat")
+            for f in ("obj.mat", "obj2.mat")
+                o = matread(joinpath(dir, f))["SMD"]["Obj"]
+                @test o isa MAT.MatlabClassObject && o.class == "myclass" && o["v"] == 1.0
+            end
+        end
     end
 end

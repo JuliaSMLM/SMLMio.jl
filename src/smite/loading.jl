@@ -151,9 +151,10 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
             c !== nothing && !isempty(c) && push!(mismatched, key)
         end
     end
-    # SMITE writes NDims 2 for its own 3D fits too, so Z and Z_SE with one value per localization
-    # say 3D (and that load_smite_3d can load the file)
-    !three_d && n > 0 && _smite_length(get(s, "Z", nothing)) == n && _smite_length(get(s, "Z_SE", nothing)) == n &&
+    # SMITE writes NDims 2 for its own 3D fits too, so numeric Z and Z_SE with one value per
+    # localization say 3D (and that load_smite_3d can load the file)
+    zfit(k) = (zc = haskey(s, k) ? _smite_numeric(s[k]) : nothing; zc !== nothing && length(zc) == n)
+    !three_d && n > 0 && zfit("Z") && zfit("Z_SE") &&
         @warn("$where has Z for each localization (a 3D fit); load_smite_2d leaves out Z (kept in " *
               "metadata), load_smite_3d loads it")
     isempty(mismatched) || @warn("$where: $(join(mismatched, ", ")) do not hold one value per " *
@@ -303,8 +304,9 @@ the loaders treat empty and per-dataset fields, and what is kept in the metadata
 
 # Keyword Arguments
 - `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize` (absent or
-  empty), and then a `Float32` one gives a `Float32` camera; when the file has one, a different
-  `pixel_size` is an error.
+  empty), and then a `Float32` one gives a `Float32` camera; when the file has one, a
+  `pixel_size` that differs from it by more than one part in a million is an error, and the
+  file's value is used.
 
 # Returns
 - [`SmiteSMLD`](@ref): the emitters in µm, with `n_frames` frames per dataset and the SMD's
@@ -357,8 +359,8 @@ at least 0 that fits an `Int` is also appended to `metadata["data_size"]`. Every
 
 # Keyword Arguments
 - `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize`, and then a
-  `Float32` one gives a `Float32` camera; when the file has one, a different `pixel_size` is an
-  error.
+  `Float32` one gives a `Float32` camera; when the file has one, a `pixel_size` that differs
+  from it by more than one part in a million is an error, and the file's value is used.
 
 # Returns
 - [`SmiteSMLD`](@ref): the emitters in µm.

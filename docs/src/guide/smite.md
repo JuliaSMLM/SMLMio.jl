@@ -58,7 +58,9 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
 
 - **No pixel size.** When the file has no `PixelSize`, or an empty one, pass it:
   `load_smite_2d(smd; pixel_size=0.0978)`. Without it the loader throws; it never assumes one.
-  When the file has a pixel size, a different `pixel_size` is an error.
+  When the file has a pixel size, a `pixel_size` that differs from it by more than one part in
+  a million is an error (so a single `PixelSize` matches the decimal it was written from), and
+  the file's value is used.
 - **Pixel size type.** A MATLAB single `PixelSize` gives an `IdealCamera{Float32}`, as in
   SMLMData 0.7.1; any other pixel size becomes a `Float64` and gives an `IdealCamera{Float64}`.
   A `pixel_size` passed to the loader sets the type only when the file has no `PixelSize`
@@ -89,7 +91,7 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   it back, and none is an error: when it is one whole number of at least 0 that fits an `Int`,
   `load_smite_3d` also appends it to `data_size`; any other `ZSize` (several values, text, -1)
   is only kept in the metadata.
-  `load_smite_2d` on a file whose `Z` and `Z_SE` hold one value per localization warns that it leaves `Z`
+  `load_smite_2d` on a file whose `Z` and `Z_SE` hold one number per localization warns that it leaves `Z`
   out (kept in the metadata); SMITE writes `NDims` 2 for its own 3D fits, so `NDims` does not
   say whether a file is 3D.
 - **Rows or columns.** An SMD built by hand in MATLAB with row vectors loads like SMITE's
@@ -175,7 +177,12 @@ again once the cause is fixed. It contains:
   `original_emitter_count` and `removed_emitter_count`. Metadata keys must be MATLAB names: an
   ASCII letter, then up to 62 letters, digits or underscores. A Dict value needs string keys,
   each a MATLAB name. Otherwise `save_smite` throws an `ArgumentError` naming every offending
-  key, before it writes anything.
+  key, before it writes anything. Each entry keeps its MATLAB class: a cell stays a cell (one
+  of structs too), and a MATLAB object read by MAT keeps its class. Two things MAT cannot write
+  are changed: an unfilled cell element, which MAT reads as an empty array it cannot write, is
+  written as an empty double array, in a cell or a struct; and a tuple is written as the array
+  it holds. Recent MAT versions read a MATLAB struct array as their own type (`MatlabStructArray`),
+  which is written as it is; one holding an unfilled cell element cannot be saved.
 - SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
   `PValue` still belongs to its localization. Each keeps its MATLAB class (SMITE's `IndSMD` is
   a cell, `ThreshFlag` uint32), except `Z` and `Z_SE`, which `load_smite_2d` keeps from a 3D
@@ -189,8 +196,9 @@ again once the cause is fixed. It contains:
   so a save and a save of its load agree; with another count they are ordinary metadata. Such
   data carry no record of which localization each value belongs to (an `id` is not that: a
   join, a filter or frame connection keeps or reuses ids), so `save_smite` cannot check that
-  order: it warns, naming every SMITE per-localization field (`Z`, `PValue`, ...) it writes in
-  the order given. Sorting, filtering or joining such data before saving misplaces those
+  order: it warns, naming every SMITE per-localization field (`Z`, `PValue`, ...) it writes
+  from the metadata in the order given (not those it writes from the emitters, such as
+  `FrameNum`, whose metadata values are not saved). Sorting, filtering or joining such data before saving misplaces those
   values; load the file with SMLMio first, whose row record lets `save_smite` check them. An
   emitter of data SMLMio loaded is taken to be the row its `id` names
   when its frame and photons equal that row's. The fields are written only when every emitter is

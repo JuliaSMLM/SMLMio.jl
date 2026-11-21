@@ -168,6 +168,9 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             # Z without Z_SE: load_smite_3d could not load it, so no advice to
             s3 = smite_smd_3d(3); s3["Z_SE"] = zeros(0, 0)
             @test_logs load_smite_2d(write_smd(dir, "zonly.mat", s3))
+            # nor with a Z_SE that is not numbers, which load_smite_3d refuses
+            s3 = smite_smd_3d(3); s3["Z_SE"] = Any["bad", "bad", "bad"]
+            @test_logs load_smite_2d(write_smd(dir, "zsetext.mat", s3))
             # Saved, the Z kept in metadata goes back with its rows, and the file says 3D.
             save_smite(smld, dir, "three-saved.mat")
             saved = matread(joinpath(dir, "three-saved.mat"))["SMD"]

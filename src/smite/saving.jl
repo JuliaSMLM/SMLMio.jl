@@ -208,11 +208,12 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         end
     end
     ndims3_from_md = length(mdz) == 2 && (n > 0 || zhad || _is_ndims3(get(md, "NDims", nothing)))
-    # Data not loaded by SMLMio: SMITE's per-localization fields written with one value per
-    # emitter are in the order given, which save_smite cannot check (Z and Z_SE when written)
+    # Data not loaded by SMLMio: SMITE's per-localization fields written from the metadata with one
+    # value per emitter are in the order given, which save_smite cannot check. Fields written from
+    # the emitters (s holds them by now) are not among them; Z and Z_SE count when written (mdz).
     unchecked = loaded || n == 0 ? String[] :
         sort!([k for (k, v) in md if k in _SMITE_STACKABLE && _smite_length(v) == n &&
-               (!(k in ("Z", "Z_SE")) || haskey(mdz, k))])
+               (k in ("Z", "Z_SE") ? haskey(mdz, k) : !haskey(s, k))])
     isempty(unchecked) || @warn("save_smite: $(join(unchecked, ", ")) written in the order given, one " *
         "value per emitter: these data were not loaded by SMLMio, so nothing records which " *
         "localization each value belongs to (a sort, filter, join or frame connection since the " *
@@ -239,7 +240,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
             push!(ambiguous, key)
             continue
         end
-        s[key] = _mat_writable(value)
+        s[key] = value
     end
     isempty(ambiguous) || @warn("save_smite: $(join(sort!(ambiguous), ", ")) not saved: SMITE stores these " *
         "per localization, they are not listed in smite_per_localization_fields as one value per file " *
@@ -432,16 +433,41 @@ function _pixel_column(what, col, origin, px)
     return out
 end
 
-# MAT reads an unfilled element of a MATLAB cell as an empty array of element type Union{}, which
-# its writer refuses; such an element is written as an empty double array, as SMITE holds an empty
-# field. Cells (arrays holding arrays) are searched, and keep their shape and other elements.
+# A value as MAT can write it, changed only where it must be. MAT reads an unfilled element of a
+# MATLAB cell as an empty array of element type Union{}, which its writer refuses; such an element
+# is written as an empty double array, as SMITE holds an empty field. A tuple (metadata built in
+# Julia) is written as the array it holds; MAT 0.10 refuses tuples. Arrays (cells) and plain Dicts
+# (MATLAB structs) are searched; a changed one is a copy with the same element type when the new
+# values fit it, so a cell of structs stays a cell, and one that needs no change is returned as it
+# is. MAT's own types (a class object, a function handle, a struct array) are written as they are,
+# keeping their MATLAB class.
 _mat_writable(v::AbstractArray{Union{}}) = zeros(size(v))
-_mat_writable(v::AbstractArray) = eltype(v) <: Number ||
-    !any(x -> x isa Union{AbstractArray,AbstractDict,Tuple}, v) ? v : map(_mat_writable, v)
-# A tuple (metadata built in Julia) is written as the array it holds; MAT 0.10 refuses tuples.
+function _mat_writable(v::AbstractArray)
+    eltype(v) <: Union{Number,AbstractString} && return v
+    out = v
+    for i in eachindex(v)
+        isassigned(v, i) || continue
+        x = v[i]
+        y = _mat_writable(x)
+        y === x && continue
+        out === v && (out = copy(v))
+        y isa eltype(out) || (out = Array{Any}(out))
+        out[i] = y
+    end
+    return out
+end
 _mat_writable(v::Tuple) = _mat_writable(collect(v))
-# A Dict (a MATLAB struct) is searched too.
-_mat_writable(v::AbstractDict) = Dict{keytype(v),Any}(k => _mat_writable(x) for (k, x) in v)
+function _mat_writable(v::Dict)
+    out = v
+    for (k, x) in v
+        y = _mat_writable(x)
+        y === x && continue
+        out === v && (out = copy(v))
+        y isa valtype(out) || (out = Dict{keytype(v),Any}(out))
+        out[k] = y
+    end
+    return out
+end
 _mat_writable(v) = v
 
 # The metadata as save_smite reads it, a copy: every value made writable (_mat_writable), and empty

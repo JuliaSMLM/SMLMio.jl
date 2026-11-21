@@ -63,15 +63,19 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   by SMLMio (built by hand, or loaded by SMLMData 0.7.1), in the order given, as 0.1.0 wrote
   them, so a save and a save of its load agree. Such data carry no record of which localization
   each value belongs to, so `save_smite` now warns, naming every SMITE per-localization field it
-  writes in the order given (a sort, filter or join before saving would misplace them);
+  writes from the metadata in the order given (a sort, filter or join before saving would
+  misplace them);
   the file says `NDims` 3 when both are written and it has localizations, its `Z` had values
   (SMITE writes `NDims` 2 for its 3D fits) or the metadata's `NDims` is 3. Every other
   per-localization field keeps its MATLAB class (SMITE's `IndSMD` stays a cell); an unfilled
   cell element, which MAT reads as an array it cannot write, is written as an empty double
-  array (0.1.0 failed to save such a file), in a struct-valued field too, and a tuple in the
-  metadata is written as the array it holds (MAT 0.10 refused it).
+  array (0.1.0 failed to save such a file), in a cell or a struct-valued field too, and a tuple
+  in the metadata is written as the array it holds (MAT 0.10 refused it). Other metadata keeps
+  its MATLAB class as in 0.1.0: a cell of structs stays a cell and a MATLAB object its class. A
+  MATLAB struct array that recent MAT versions read as a `MatlabStructArray` is written as it is,
+  so one holding an unfilled cell element still cannot be saved.
 - `load_smite_2d` warned that it leaves `Z` out only for a file marked `NDims` 3, but SMITE marks
-  its own 3D fits `NDims` 2; it now warns when `Z` and `Z_SE` hold one value per localization.
+  its own 3D fits `NDims` 2; it now warns when `Z` and `Z_SE` hold one number per localization.
 
 ## 0.1.0 (2026-11-16)
 
