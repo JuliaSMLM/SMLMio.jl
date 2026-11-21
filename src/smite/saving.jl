@@ -51,21 +51,21 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s = Dict{String,Any}()
 
     # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose z and σ_z columns
-    # MAT writes as MATLAB single or double. Anything else saves without Z; non-empty 3D or mixed
-    # data that lose Z get a warning.
+    # are written as MATLAB single or double (see _mat_column). Anything else saves without Z;
+    # non-empty 3D or mixed data that lose Z get a warning.
     d = emitter_ndims(smld.emitters)
     zcols = nothing
     if eltype(smld.emitters) <: Emitter3DFit
-        zcols = ([e.z for e in smld.emitters], [e.σ_z for e in smld.emitters])
+        zcols = (_mat_column([e.z for e in smld.emitters]), _mat_column([e.σ_z for e in smld.emitters]))
     elseif d == 3 && !isempty(smld.emitters) &&
            all(e -> hasproperty(e, :z) && hasproperty(e, :σ_z), smld.emitters)
-        z, σz = [e.z for e in smld.emitters], [e.σ_z for e in smld.emitters]
+        z, σz = _mat_column([e.z for e in smld.emitters]), _mat_column([e.σ_z for e in smld.emitters])
         eltype(z) in (Float32, Float64) && eltype(σz) in (Float32, Float64) && (zcols = (z, σz))
     end
     if zcols === nothing && !isempty(smld.emitters)
         d === nothing && @warn("save_smite: mixed 2D/3D emitters: Z not saved; " *
                                "save 2D and 3D data separately")
-        d == 3 && @warn("save_smite: 3D emitters without Float32/Float64 z and σ_z: Z not saved")
+        d == 3 && @warn("save_smite: 3D emitters whose z or σ_z are not real numbers MAT can write: Z not saved")
     end
     
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
@@ -89,8 +89,8 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         s["Z"] = zcols[1]
     end
     
-    s["Photons"] = [e.photons for e in smld.emitters]
-    s["Bg"] = [e.bg for e in smld.emitters]
+    s["Photons"] = _mat_column([e.photons for e in smld.emitters])
+    s["Bg"] = _mat_column([e.bg for e in smld.emitters])
     
     s["X_SE"] = _same_float([e.σ_x for e in smld.emitters], e -> e.σ_x / px, smld.emitters)
     s["Y_SE"] = _same_float([e.σ_y for e in smld.emitters], e -> e.σ_y / px, smld.emitters)
@@ -98,8 +98,8 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         s["Z_SE"] = zcols[2]
     end
     
-    s["Photons_SE"] = [e.σ_photons for e in smld.emitters]
-    s["Bg_SE"] = [e.σ_bg for e in smld.emitters]
+    s["Photons_SE"] = _mat_column([e.σ_photons for e in smld.emitters])
+    s["Bg_SE"] = _mat_column([e.σ_bg for e in smld.emitters])
     
     # Counts and indices are doubles, as most SMITE results files hold them (MATLAB integer arithmetic
     # rounds); one a double cannot hold exactly is an error, not a rounded value
@@ -301,12 +301,27 @@ function _collect_bad_keys!(bad, path, v::AbstractArray)
 end
 _collect_bad_keys!(bad, path, _) = nothing
 
+# MAT writes a vector whose element type is not concrete (Float32 and Float64 emitters together,
+# say) as a MATLAB cell, which neither SMITE nor the loaders read as a number column. Such a
+# column is written as single when every value is Float32, otherwise as double when every value
+# is real. A column of one concrete type keeps it (MAT writes Float32 as single, Float64 as
+# double, and refuses some others, such as Float16).
+function _mat_eltype(col)
+    T = eltype(col)
+    isconcretetype(T) && return T
+    isempty(col) && return Float64
+    all(x -> x isa Float32, col) && return Float32
+    all(x -> x isa Real, col) && return Float64
+    return T
+end
+_mat_column(col) = (T = _mat_eltype(col); T === eltype(col) ? col : convert(Vector{T}, col))
+
 # The column f(e) for each emitter, in the float type of the emitters' own column `col` when that
-# is Float32 or Float64 (MATLAB single or double), so Float32 data stay single.
+# is written as Float32 or Float64 (MATLAB single or double), so Float32 data stay single.
 function _same_float(col, f, emitters)
     vals = [f(e) for e in emitters]
-    T = eltype(col)
-    return T in (Float32, Float64) ? convert(Vector{T}, vals) : vals
+    T = _mat_eltype(col)
+    return T in (Float32, Float64) ? convert(Vector{T}, vals) : _mat_column(vals)
 end
 
 # A count or index as a MATLAB double. A double holds every whole number only up to 2^53, so an

@@ -121,11 +121,14 @@ disk, a lost network share, an interruption) can leave the file partly written, 
 write; the error then says the file is incomplete. The data are unchanged in memory, so save
 again once the cause is fixed. It contains:
 
-- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels. Columns of `Float32` stay MATLAB single.
+- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`.
+  A column whose values are all `Float32` stays MATLAB single; `Float32` and `Float64`
+  values together (emitters of both types in one SMLD) are written as double, never as the
+  cell MAT would write for a mixed vector, which neither SMITE nor the loaders read as numbers.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
-  has properties `z` and `σ_z` and whose `z` and `σ_z` columns are each all `Float32` or all
-  `Float64` (MAT cannot write other types, and writes a mixed column as a cell). Other non-empty
-  3D or mixed 2D/3D data save without `Z`, with a warning: an SMD has one `Z` column for all
+  has properties `z` and `σ_z` and whose `z` and `σ_z` columns are each written as single or
+  double, as above (MAT cannot write other types, such as `Float16`). Other non-empty 3D or
+  mixed 2D/3D data save without `Z`, with a warning: an SMD has one `Z` column for all
   localizations, so save 2D and 3D data separately to keep it.
 - `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
   and indices as doubles, as most SMITE results files hold them. A double holds every whole

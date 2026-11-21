@@ -20,6 +20,11 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   now loads as a numeric column. An optional field (`Photons_SE`, `Bg_SE`, `DatasetNum`,
   `ConnectID`) holding something other than numbers is an `ArgumentError` naming it, where it
   failed later with a `MethodError`.
+- `save_smite` of emitters of `Float32` and `Float64` together (a `Union` element type) wrote
+  `Photons`, `Bg`, their errors and `Z`, `Z_SE` as MATLAB cells, which MAT makes of a vector of
+  mixed types, so `load_smite_3d` refused its own file. Such columns are now written as double
+  (a column of only `Float32` values stays single), and 3D data whose `z` mixes `Float32` and
+  `Float64` save their `Z` instead of dropping it with a warning.
 
 ## 0.1.0 (2026-11-16)
 

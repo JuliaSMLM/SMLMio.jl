@@ -214,6 +214,33 @@ end
             smd = matread(joinpath(dir, "u3.mat"))["SMD"]
             @test Float64.(vec(smd["Z"])) == [0.5, 0.25]
             @test Float64.(vec(smd["Z_SE"])) == [0.125, 0.0625]
+            # Float32 and Float64 emitters together: every column is a double array, never the
+            # cell MAT writes for a mixed vector, and the file loads back through the loader.
+            cols = ["X", "Y", "Z", "X_SE", "Y_SE", "Z_SE", "Photons", "Bg", "Photons_SE", "Bg_SE",
+                    "FrameNum", "DatasetNum", "ConnectID"]
+            @test all(k -> smd[k] isa AbstractArray{Float64}, cols)
+            back = load_smite_3d(SmiteSMD(dir, "u3.mat"))
+            @test [e.z for e in back.emitters] == [0.5, 0.25]
+            @test [e.σ_z for e in back.emitters] == [0.125, 0.0625]
+            @test [e.photons for e in back.emitters] == [1000.0, 1000.0]
+            @test [e.x for e in back.emitters] ≈ [1.0, 1.0]
+            # The same in 2D, and with a Float32 camera, whose pixel makes the position columns mixed too
+            U2 = Union{Emitter2DFit{Float32}, Emitter2DFit{Float64}}
+            e2 = Emitter2DFit{Float64}(1.0, 2.0, 900.0, 9.0, 0.01, 0.02, 40.0, 1.0)
+            e2f = Emitter2DFit{Float32}(3.0f0, 4.0f0, 800.0f0, 8.0f0, 0.01f0, 0.02f0, 30.0f0, 1.5f0)
+            for c in (cam, IdealCamera(1:64, 1:64, 0.1f0))
+                save_smite(SmiteSMLD{Float64,U2}(U2[e2, e2f], c, 1, 1, Dict{String,Any}()), dir, "u2.mat")
+                smd = matread(joinpath(dir, "u2.mat"))["SMD"]
+                @test all(k -> smd[k] isa AbstractArray{Float64}, setdiff(cols, ["Z", "Z_SE"]))
+                back = load_smite_2d(SmiteSMD(dir, "u2.mat"))
+                @test [e.photons for e in back.emitters] == [900.0, 800.0]
+                @test [e.σ_bg for e in back.emitters] == [1.0, 1.5]
+                @test [e.y for e in back.emitters] ≈ [2.0, 4.0] rtol = 1e-6
+            end
+            # Only Float32 values in an abstract-typed vector stay single, as Float32 data do
+            save_smite(SmiteSMLD{Float64,U2}(U2[e2f, e2f], cam, 1, 1, Dict{String,Any}()), dir, "u2f.mat")
+            smd = matread(joinpath(dir, "u2f.mat"))["SMD"]
+            @test all(k -> eltype(smd[k]) == Float32, ["X", "Photons", "Bg", "X_SE", "Photons_SE", "Bg_SE"])
             # A foreign emitter with z but no σ_z saves as in 0.7.0: no error, no Z, a warning.
             sf = SmiteSMLD{Float64,ForeignZNoSigmaZ{Float64}}([fz, fz], cam, 1, 1, Dict{String,Any}())
             @test_logs (:warn, r"3D emitters") save_smite(sf, dir, "fz.mat")
@@ -245,7 +272,8 @@ end
     @testset "save_smite against 0.7.0" begin
         # Where 0.7.0 saved, save_smite saves too, keeping every 0.7.0 key and value (positions in
         # SMITE's pixels); it adds the camera's NDims, PixelSize, XSize and YSize, and Z and Z_SE
-        # for non-empty 3D data whose z and σ_z are all Float32 or Float64.
+        # for non-empty 3D data whose z and σ_z are written as single or double (all Float32, all
+        # Float64, or Float32 and Float64 together, written as double).
         camkeys = ["NDims", "PixelSize", "XSize", "YSize"]
         cam = IdealCamera(1:64, 1:64, 0.1)
         A = SMLMCore.AbstractEmitter
@@ -263,15 +291,15 @@ end
         unchanged = (sm([e2, e2]), sm([e3, e3]), sm([e3f, e3f]), sm(U3[]), sm(A[]), sm(A[e2, e3]),
                      sm([fz, fz]), sm([hz, hz]), sm([_oddz(missing, 0.02), _oddz(missing, 0.02)]),
                      sm([_oddz(Float16(0.5), Float16(0.02)), _oddz(Float16(0.5), Float16(0.02))]),
-                     sm(A[e3, _oddz(missing, 0.02)]),
-                     # Float32 and Float64 z together make an AbstractFloat column, which MAT
-                     # would write as a cell: no Z.
-                     sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]))
+                     sm(A[e3, _oddz(missing, 0.02)]))
         for s in unchanged
             @test first(_legacy_compare(s)) == camkeys
         end
+        # Float32 and Float64 z together make an AbstractFloat column, which MAT would write as a
+        # cell; it is written as double.
         widened = (sm(A[e3, e3b]), sm([f3, f3b]), sm([_oddz(0.5, 0.02), _oddz(0.25, 0.03)]),
-                   sm([_oddz(0.5f0, 0.02f0), _oddz(0.25f0, 0.03f0)]))
+                   sm([_oddz(0.5f0, 0.02f0), _oddz(0.25f0, 0.03f0)]),
+                   sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]))
         for s in widened
             added, new = _legacy_compare(s)
             @test added == [camkeys; "Z"; "Z_SE"]
@@ -292,8 +320,11 @@ end
             @test_logs (:warn, r"mixed 2D/3D") save_smite(sm(A[e2, e3]), dir, "m.mat")
             @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(missing, 0.02)]), dir, "o.mat")
             @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(Float16(0.5), Float16(0.02))]), dir, "h.mat")
-            @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]), dir, "f.mat")
             @test !haskey(matread(joinpath(dir, "h.mat"))["SMD"], "Z")
+            # Float32 and Float64 z together lose nothing: written as double
+            @test_logs save_smite(sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]), dir, "f.mat")
+            @test eltype(matread(joinpath(dir, "f.mat"))["SMD"]["Z"]) == Float64
+            @test [e.z for e in load_smite_3d(SmiteSMD(dir, "f.mat")).emitters] == [0.5, 0.25]
             @test_logs save_smite(sm([e2, e2]), dir, "2.mat")   # 2D data lose nothing
             @test_logs save_smite(sm(A[e3, e3]), dir, "3.mat")  # widened: Z written
             @test_logs save_smite(sm(A[]), dir, "e.mat")        # empty data lose nothing
