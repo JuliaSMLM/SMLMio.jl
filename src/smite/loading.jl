@@ -18,6 +18,18 @@ _smite_length(_) = -1
 _smite_vec(v::AbstractArray) = vec(v)
 _smite_vec(v::Number) = [v]
 
+# A per-localization field as a vector of numbers, or nothing when it is not numeric. MAT reads a
+# MATLAB cell of numbers (single and double values together, say) as an array of Any; its values
+# are promoted to one type.
+function _smite_numeric(v)
+    v isa Number && return [v]
+    v isa AbstractArray || return nothing
+    v isa AbstractArray{<:Number} && return vec(v)
+    all(x -> x isa Number, v) || return nothing
+    T = isempty(v) ? Float64 : mapreduce(typeof, promote_type, v)
+    return convert(Vector{T}, vec(v))
+end
+
 # A scalar field (XSize, PixelSize, ...) as the file stores it, or nothing when it is absent or
 # empty; the caller checks it before converting it. Several values, or a value that is not a
 # number, is an ArgumentError naming the field.
@@ -83,17 +95,19 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     for key in (three_d ? vcat(_SMITE_REQUIRED, _SMITE_REQUIRED_3D) : _SMITE_REQUIRED)
         v = get(s, key, nothing)
         v === nothing && throw(ArgumentError("$where has no $key field"))
-        v isa Union{Number,AbstractArray{<:Number}} || throw(ArgumentError("$where: $key is not numeric"))
-        _smite_length(v) == n || throw(ArgumentError(
-            "$where: $key holds $(_smite_length(v)) values for $n localizations"))
-        cols[key] = _smite_vec(v)
+        c = _smite_numeric(v)
+        c === nothing && throw(ArgumentError("$where: $key is not numeric"))
+        length(c) == n || throw(ArgumentError("$where: $key holds $(length(c)) values for $n localizations"))
+        cols[key] = c
     end
     defaulted = String[]
     mismatched = String[]
     for (key, default) in _SMITE_OPTIONAL
         v = get(s, key, nothing)
         if v !== nothing && _smite_length(v) == n
-            cols[key] = _smite_vec(v)
+            c = _smite_numeric(v)
+            c === nothing && throw(ArgumentError("$where: $key is not numeric"))
+            cols[key] = c
         else
             cols[key] = fill(default, n)
             push!(defaulted, key)

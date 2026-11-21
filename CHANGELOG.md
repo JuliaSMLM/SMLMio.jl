@@ -15,6 +15,11 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 - `save_smite` wrote `n_frames`, `n_datasets` and each emitter's `frame`, `dataset` and
   `track_id` as doubles without checking them, so a value above 2^53 was saved rounded. Such a
   value is now an `ArgumentError` naming it, and nothing is written.
+- The loaders refused a per-localization field stored as a MATLAB cell of numbers (MAT reads it
+  as an array of `Any`), which SMLMData 0.7.1 loaded: "Photons is not numeric". Such a field
+  now loads as a numeric column. An optional field (`Photons_SE`, `Bg_SE`, `DatasetNum`,
+  `ConnectID`) holding something other than numbers is an `ArgumentError` naming it, where it
+  failed later with a `MethodError`.
 
 ## 0.1.0 (2026-11-16)
 

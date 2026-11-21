@@ -193,6 +193,42 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         end
     end
 
+    @testset "a field stored as a cell of numbers loads as a column" begin
+        # MATLAB keeps single and double values together in a cell, which MAT reads as an array
+        # of Any; SMLMData 0.7.1 loaded such a column, and save_smite 0.1.0 could write one.
+        mktempdir() do dir
+            s = smite_smd(2)
+            s["Photons"] = Any[Float32(200.0), 500.0]               # a row cell
+            s["X"] = reshape(Any[10.0f0, 40.0], :, 1)               # a column cell
+            s["FrameNum"] = Any[1.0, 2.0]
+            s["Bg_SE"] = Any[Float32(1.5), 2.5]                     # an optional field
+            s["ConnectID"] = Any[3.0, true]
+            smld = load_smite_2d(write_smd(dir, "cells.mat", s))
+            @test [e.photons for e in smld.emitters] == [200.0, 500.0]
+            @test [e.x for e in smld.emitters] ≈ ([10.0, 40.0] .- 0.5) .* 0.1
+            @test [e.frame for e in smld.emitters] == [1, 2]
+            @test [e.σ_bg for e in smld.emitters] == [1.5, 2.5]
+            @test [e.track_id for e in smld.emitters] == [3, 1]
+            @test smld.metadata["smite_row_photons"] == [200.0, 500.0]
+            # 3D: Z and Z_SE as cells
+            s3 = smite_smd_3d(2); s3["Z"] = Any[Float32(-0.25), 0.5]; s3["Z_SE"] = Any[0.04, Float32(0.05)]
+            smld3 = load_smite_3d(write_smd(dir, "cells3.mat", s3))
+            @test [e.z for e in smld3.emitters] == [-0.25, 0.5]
+            @test [e.σ_z for e in smld3.emitters] ≈ [0.04, 0.05]
+            # Complex values in a cell are screened as in a numeric column
+            s = smite_smd(2); s["Bg"] = Any[5.0, ComplexF64(5, 1)]
+            @test [e.id for e in quiet(() -> load_smite_2d(write_smd(dir, "cellc.mat", s))).emitters] == [1]
+            # A cell holding anything but numbers is an ArgumentError naming the field, required
+            # or optional (an optional one used to fail later with a MethodError)
+            for (key, v) in (("Photons", Any["a", "b"]), ("Y", Any[1.0, zeros(0, 0)]),
+                             ("Bg_SE", Any["a", "b"]), ("ConnectID", Any[1.0, "x"]),
+                             ("DatasetNum", Any[1.0, zeros(0, 0)]))
+                s = smite_smd(2); s[key] = v
+                @test_throws Regex("$key is not numeric") load_smite_2d(write_smd(dir, "cellbad_$key.mat", s))
+            end
+        end
+    end
+
     @testset "3D without ZSize" begin
         # SMITE's createSMD defines XSize and YSize but no ZSize. This SMD is hand-built with
         # SMITE's fields.
