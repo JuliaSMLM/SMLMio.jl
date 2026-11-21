@@ -657,7 +657,7 @@ end
         # A camera the loaders would refuse is an ArgumentError, before anything is written
         for (name, cam, msg) in (
                 ("ny0.mat", IdealCamera(2, 0, 0.125), "the camera has 2 × 0 pixels"),
-                ("wide.mat", IdealCamera(2^24 + 1, 1, 1.0f0), "16777217 × 1 pixels of 1.0 µm do not give finite, increasing"),
+                ("wide.mat", IdealCamera(2^24 + 1, 1, 1.0f0), "pixel edges do not strictly increase"),
                 ("inf.mat", IdealCamera(1, 1, big"1e309"), "the camera's pixel size Inf is not finite"))
             err = try save_smite(SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name); nothing catch ex; ex end
             @test err isa ArgumentError
@@ -673,9 +673,29 @@ end
         @test load_smite_2d(SmiteSMD(dir, "exact.mat")).emitters[1].x === Float64(x)
         # A finite position whose pixel coordinate a single cannot hold is an ArgumentError
         e32 = Emitter2DFit{Float32}(floatmax(Float32), 1.0f0, 1000.0f0, 10.0f0, 0.01f0, 0.01f0, 50.0f0, 2.0f0)
-        @test_throws r"x of emitter 1 is .*a MATLAB single cannot hold" save_smite(
+        @test_throws r"x of emitter 1 is .*a MATLAB single in SMITE's pixels cannot hold" save_smite(
             SMLMCore.BasicSMLD([e32], IdealCamera(1:64, 1:64, 0.25f0), 1, 1), dir, "over.mat")
         @test !isfile(joinpath(dir, "over.mat"))
+        # A finite value the loaders would read back as infinite, or an uncertainty that would
+        # read back as 0, is an ArgumentError too
+        cam3 = IdealCamera(1:64, 1:64, 3.0)
+        for (name, es, msg) in (("xmax.mat", [_anyloc(x=floatmax(Float64))], "x of emitter 1 is"),
+                                ("sxmax.mat", [AnyNumLoc(1.0, 1.5, 1000.0, 10.0, floatmax(Float64), 0.01, 50.0, 2.0, 1, 1, 0, 1)],
+                                 "σ_x of emitter 1 is"))
+            @test_throws Regex(msg) save_smite(AnyCountSMLD(es, cam3, 1, 1, Dict{String,Any}()), dir, name)
+            @test !isfile(joinpath(dir, name))
+        end
+        tiny = Emitter2DFit{Float32}(1.0f0, 1.0f0, 1000.0f0, 10.0f0, nextfloat(0.0f0), 0.01f0, 50.0f0, 2.0f0)
+        @test_throws r"σ_x of emitter 1 is" save_smite(
+            SMLMCore.BasicSMLD([tiny], IdealCamera(1:64, 1:64, 2.0f0), 1, 1), dir, "tiny.mat")
+        # A camera origin that is not a double is subtracted exactly
+        big0 = BigFloat(2)^53 + 1
+        camb = IdealCamera(collect(big0 .+ (0:4)), collect(BigFloat(0):4))
+        save_smite(AnyCountSMLD([_anyloc(x=Float64(2)^53 + 2)], camb, 1, 1, Dict{String,Any}()), dir, "bigorigin.mat")
+        @test matread(joinpath(dir, "bigorigin.mat"))["SMD"]["X"] === 1.5
+        # A camera whose edges do not increase is refused
+        flat = IdealCamera(Float32[0, 1], Float32[2^24, 2^24])
+        @test_throws r"pixel edges do not strictly increase" save_smite(SMLMCore.BasicSMLD([em], flat, 1, 1), dir, "flat.mat")
         # Values with a zero imaginary part are their real part, as 0.1.0 saved them
         save_smite(AnyCountSMLD([_anyloc(photons=4.0 + 0.0im)], IdealCamera(1:64, 1:64, 0.1), 1, 1,
                                 Dict{String,Any}()), dir, "c0.mat")

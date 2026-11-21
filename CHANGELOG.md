@@ -46,7 +46,8 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   and the emitter (for `z` and `σ_z` that are not numbers, such as `missing`, the file is saved
   without `Z`, with a warning, as before, and so is the metadata's). Positions in SMITE's pixels are
   computed in `Float64` from the written pixel size, where a `Float32` camera rounded them, and
-  `save_smite` refuses a camera its loaders could not build back (no pixels along an axis, a
+  each must load back finite (an uncertainty also not as 0); `save_smite` refuses a camera its
+  loaders could not build back (no pixels along an axis, edges that do not strictly increase, a
   pixel size that is not finite as written, `Float32` edges that round onto each other). 3D
   data whose `z` mixes `Float32` and `Float64`, or is `Float16`, save their `Z` instead of
   dropping it. `Z` and `Z_SE` kept in the metadata by `load_smite_2d` are written the same way

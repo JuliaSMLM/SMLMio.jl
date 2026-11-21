@@ -77,8 +77,11 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
     nx, ny = length(ex) - 1, length(ey) - 1
-    nx >= 1 && ny >= 1 || throw(ArgumentError("save_smite: the camera has $nx × $ny pixels; SMITE's " *
-                                              "XSize and YSize must each be at least 1"))
+    nx >= _SMITE_COUNT_MIN["XSize"] && ny >= _SMITE_COUNT_MIN["YSize"] || throw(ArgumentError(
+        "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must each be at least 1"))
+    increasing(e) = all(k -> e[k+1] > e[k], 1:length(e)-1)
+    increasing(ex) && increasing(ey) ||
+        throw(ArgumentError("save_smite: this camera's pixel edges do not strictly increase"))
     x0, y0 = ex[1], ey[1]
     px = ex[2] - ex[1]
     on_grid(edges, e0) = all(k -> abs(edges[k] - (e0 + (k - 1) * px)) <= px / 1000, eachindex(edges))
@@ -89,12 +92,13 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # camera) and otherwise double; the camera the loaders will build from it must be valid
     pxw = eltype(ex) === Float32 ? px : Float64(px)
     _smite_camera("save_smite", nx, ny, _smite_pixel_size("save_smite", "the camera's pixel size", pxw))
-    # Positions in SMITE's pixels, computed in Float64 from the written pixel size
-    x0f, y0f, pxf = Float64(x0), Float64(y0), Float64(pxw)
+    # Positions in SMITE's pixels, computed in Float64 from the written pixel size, as the loaders
+    # compute them back
+    pxf = Float64(pxw)
     iszero(x0) && iszero(y0) || @warn("save_smite: the camera's first pixel edge is at ($x0, $y0) µm; " *
         "SMITE has no origin, so the file loads back with the camera at 0 and positions moved by that offset")
-    s["X"] = _pixel_column("x", [e.x for e in smld.emitters], v -> (v - x0f) / pxf + 0.5)
-    s["Y"] = _pixel_column("y", [e.y for e in smld.emitters], v -> (v - y0f) / pxf + 0.5)
+    s["X"] = _pixel_column("x", [e.x for e in smld.emitters], x0, pxf)
+    s["Y"] = _pixel_column("y", [e.y for e in smld.emitters], y0, pxf)
     if zcols !== nothing
         s["Z"] = zcols[1]
     end
@@ -102,8 +106,8 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s["Photons"] = _mat_column("photons", [e.photons for e in smld.emitters])
     s["Bg"] = _mat_column("bg", [e.bg for e in smld.emitters])
     
-    s["X_SE"] = _pixel_column("σ_x", [e.σ_x for e in smld.emitters], v -> v / pxf)
-    s["Y_SE"] = _pixel_column("σ_y", [e.σ_y for e in smld.emitters], v -> v / pxf)
+    s["X_SE"] = _pixel_column("σ_x", [e.σ_x for e in smld.emitters], nothing, pxf)
+    s["Y_SE"] = _pixel_column("σ_y", [e.σ_y for e in smld.emitters], nothing, pxf)
     if zcols !== nothing
         s["Z_SE"] = zcols[2]
     end
@@ -118,8 +122,8 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s["ConnectID"] = _mat_counts("track_id", [e.track_id for e in smld.emitters])
 
     # Add metadata: what the loaders need to read the file back, from the camera
-    s["NFrames"] = _mat_count("n_frames", smld.n_frames, _SMITE_COUNT_MIN["NFrames"])
-    s["NDatasets"] = _mat_count("n_datasets", smld.n_datasets, _SMITE_COUNT_MIN["NDatasets"])
+    s["NFrames"] = _mat_count("n_frames", smld.n_frames, "NFrames")
+    s["NDatasets"] = _mat_count("n_datasets", smld.n_datasets, "NDatasets")
     s["XSize"] = Float64(nx)
     s["YSize"] = Float64(ny)
     s["PixelSize"] = pxw
@@ -377,18 +381,29 @@ function _z_columns(names, cols, unit, ids)
     return any(r -> r isa Tuple, conv) ? nothing : collect(conv)
 end
 
-# A position column in SMITE's pixels: f of each emitter's value, computed in Float64 from the
-# value as checked by _mat_column, then single when the emitters' column is all Float32, so Float32
-# data stay single. A finite value whose pixel coordinate the written type cannot hold is an
-# ArgumentError naming the emitter.
-function _pixel_column(what, col, f)
+# A column in SMITE's pixels: a position (`origin`, the camera's first edge) X = (x - origin) / px
+# + 0.5, or an uncertainty (`origin` nothing) X_SE = σ / px, each from the value as checked by
+# _mat_column, in Float64 (ComplexF64 for complex values) and then single when the emitters'
+# column is all Float32. The origin is subtracted exactly when it is not itself a double (a
+# BigFloat edge). A finite value whose pixel value the loaders would read back as infinite, or an
+# uncertainty that would read back as 0 when it is not, is an ArgumentError naming the emitter.
+function _pixel_column(what, col, origin, px)
     own = _mat_column(what, col)
-    vals = eltype(own) <: Complex ? ComplexF64[f(v) for v in own] : Float64[f(Float64(v)) for v in own]
+    T = eltype(own) <: Complex ? Complex{Float64} : Float64
+    vals = if origin === nothing
+        T[T(v) / px for v in own]
+    elseif Float64(origin) == origin
+        T[(T(v) - Float64(origin)) / px + 0.5 for v in own]
+    else
+        T[T(big(v) - origin) / px + 0.5 for v in own]
+    end
     out = eltype(own) === Float32 ? Float32.(vals) : vals
-    bad = findfirst(i -> isfinite(own[i]) && !isfinite(out[i]), eachindex(own))
+    back(X) = origin === nothing ? X * px : (X - 0.5) * px      # as the loaders compute (px a Float64)
+    ok(i) = !isfinite(own[i]) || (isfinite(back(out[i])) && (origin !== nothing || iszero(own[i]) || !iszero(out[i])))
+    bad = findfirst(!ok, eachindex(own))
     bad === nothing || throw(ArgumentError("save_smite: $what of emitter $bad is $(repr(col[bad])), " *
-        "whose value in SMITE's pixels a MATLAB $(eltype(out) === Float32 ? "single" : "double") " *
-        "cannot hold; nothing was written"))
+        "which a MATLAB $(eltype(out) === Float32 ? "single" : "double") in SMITE's pixels cannot " *
+        "hold so that it loads back; nothing was written"))
     return out
 end
 
@@ -396,7 +411,8 @@ end
 # every file save_smite writes loads: a whole number in Int's range, at least `lo`, that a double
 # holds exactly (every whole number up to 2^53, and some above). Anything else is an
 # ArgumentError naming the value, before anything is written.
-function _mat_count(what, v, lo=typemin(Int))
+function _mat_count(what, v, key)
+    lo = _SMITE_COUNT_MIN[key]
     _mat_count_ok(v, lo) || _bad_count(what, v, lo)
     return Float64(real(v))
 end
