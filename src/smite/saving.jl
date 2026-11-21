@@ -50,22 +50,21 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # Create SMD structure
     s = Dict{String,Any}()
 
-    # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose z and σ_z columns
-    # are written as MATLAB single or double (see _mat_column). Anything else saves without Z;
-    # non-empty 3D or mixed data that lose Z get a warning.
+    # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose every emitter has
+    # z and σ_z, when every z and σ_z is a real number a double holds exactly (_mat_floats).
+    # Anything else saves without Z; non-empty 3D or mixed data that lose Z get a warning.
     d = emitter_ndims(smld.emitters)
     zcols = nothing
-    if eltype(smld.emitters) <: Emitter3DFit
-        zcols = (_mat_column([e.z for e in smld.emitters]), _mat_column([e.σ_z for e in smld.emitters]))
-    elseif d == 3 && !isempty(smld.emitters) &&
-           all(e -> hasproperty(e, :z) && hasproperty(e, :σ_z), smld.emitters)
-        z, σz = _mat_column([e.z for e in smld.emitters]), _mat_column([e.σ_z for e in smld.emitters])
-        eltype(z) in (Float32, Float64) && eltype(σz) in (Float32, Float64) && (zcols = (z, σz))
+    if eltype(smld.emitters) <: Emitter3DFit || (d == 3 && !isempty(smld.emitters) &&
+           all(e -> hasproperty(e, :z) && hasproperty(e, :σ_z), smld.emitters))
+        z, σz = _mat_floats([e.z for e in smld.emitters]), _mat_floats([e.σ_z for e in smld.emitters])
+        z isa Integer || σz isa Integer || (zcols = (z, σz))
     end
     if zcols === nothing && !isempty(smld.emitters)
         d === nothing && @warn("save_smite: mixed 2D/3D emitters: Z not saved; " *
                                "save 2D and 3D data separately")
-        d == 3 && @warn("save_smite: 3D emitters whose z or σ_z are not real numbers MAT can write: Z not saved")
+        d == 3 && @warn("save_smite: 3D emitters whose z or σ_z are not all real numbers a MATLAB " *
+                        "double holds exactly: Z not saved")
     end
     
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
@@ -83,23 +82,23 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
                             "are not uniform and square"))
     iszero(x0) && iszero(y0) || @warn("save_smite: the camera's first pixel edge is at ($x0, $y0) µm; " *
         "SMITE has no origin, so the file loads back with the camera at 0 and positions moved by that offset")
-    s["X"] = _same_float([e.x for e in smld.emitters], e -> (e.x - x0) / px + 0.5, smld.emitters)
-    s["Y"] = _same_float([e.y for e in smld.emitters], e -> (e.y - y0) / px + 0.5, smld.emitters)
+    s["X"] = _same_float("x", [e.x for e in smld.emitters], e -> (e.x - x0) / px + 0.5, smld.emitters)
+    s["Y"] = _same_float("y", [e.y for e in smld.emitters], e -> (e.y - y0) / px + 0.5, smld.emitters)
     if zcols !== nothing
         s["Z"] = zcols[1]
     end
     
-    s["Photons"] = _mat_column([e.photons for e in smld.emitters])
-    s["Bg"] = _mat_column([e.bg for e in smld.emitters])
+    s["Photons"] = _mat_column("photons", [e.photons for e in smld.emitters])
+    s["Bg"] = _mat_column("bg", [e.bg for e in smld.emitters])
     
-    s["X_SE"] = _same_float([e.σ_x for e in smld.emitters], e -> e.σ_x / px, smld.emitters)
-    s["Y_SE"] = _same_float([e.σ_y for e in smld.emitters], e -> e.σ_y / px, smld.emitters)
+    s["X_SE"] = _same_float("σ_x", [e.σ_x for e in smld.emitters], e -> e.σ_x / px, smld.emitters)
+    s["Y_SE"] = _same_float("σ_y", [e.σ_y for e in smld.emitters], e -> e.σ_y / px, smld.emitters)
     if zcols !== nothing
         s["Z_SE"] = zcols[2]
     end
     
-    s["Photons_SE"] = _mat_column([e.σ_photons for e in smld.emitters])
-    s["Bg_SE"] = _mat_column([e.σ_bg for e in smld.emitters])
+    s["Photons_SE"] = _mat_column("σ_photons", [e.σ_photons for e in smld.emitters])
+    s["Bg_SE"] = _mat_column("σ_bg", [e.σ_bg for e in smld.emitters])
     
     # Counts and indices are doubles, as most SMITE results files hold them (MATLAB integer arithmetic
     # rounds); one a double cannot hold exactly is an error, not a rounded value
@@ -173,6 +172,11 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         if key in perloc
             key in towrite || continue
             value = _smite_vec(value)[rows]
+            # A cell of numbers (from a file whose field was one) is written as a number column
+            if !isconcretetype(eltype(value))
+                v = _mat_floats(value)
+                v isa Integer || (value = v)
+            end
         elseif loaded && key in _SMITE_STACKABLE && nsaved > 0 && _smite_length(value) == nsaved
             push!(ambiguous, key)
             continue
@@ -303,27 +307,41 @@ function _collect_bad_keys!(bad, path, v::AbstractArray)
 end
 _collect_bad_keys!(bad, path, _) = nothing
 
-# MAT writes a vector whose element type is not concrete (Float32 and Float64 emitters together,
-# say) as a MATLAB cell, which neither SMITE nor the loaders read as a number column. Such a
-# column is written as single when every value is Float32, otherwise as double when every value
-# is real. A column of one concrete type keeps it (MAT writes Float32 as single, Float64 as
-# double, and refuses some others, such as Float16).
-function _mat_eltype(col)
-    T = eltype(col)
-    isconcretetype(T) && return T
-    isempty(col) && return Float64
-    all(x -> x isa Float32, col) && return Float32
-    all(x -> x isa Real, col) && return Float64
-    return T
+# A numeric column as MATLAB writes it: single when every value is Float32, otherwise double.
+# The column is converted by its values, not its element type: MAT writes a vector whose element
+# type is not concrete (Float32 and Float64 emitters together, say) as a cell, which SMITE cannot
+# compute with, and refuses some types (Float16, BigFloat). Returns the converted vector, or the
+# index of the first value that is not a real number a double holds exactly.
+function _mat_floats(col)
+    isempty(col) && return eltype(col) === Float32 ? Float32[] : Float64[]
+    all(x -> x isa Float32, col) && return convert(Vector{Float32}, col)
+    out = Vector{Float64}(undef, length(col))
+    for (i, x) in enumerate(col)
+        x isa Real || return i
+        d = Float64(x)
+        x isa Union{Float32,Float64} || isequal(d, x) || return i
+        out[i] = d
+    end
+    return out
 end
-_mat_column(col) = (T = _mat_eltype(col); T === eltype(col) ? col : convert(Vector{T}, col))
 
-# The column f(e) for each emitter, in the float type of the emitters' own column `col` when that
-# is written as Float32 or Float64 (MATLAB single or double), so Float32 data stay single.
-function _same_float(col, f, emitters)
+# The emitters' column `what`, or an ArgumentError naming the first emitter whose value cannot be
+# written so (a value that is not real, or one a double would round, such as a BigFloat or an
+# integer above 2^53), before anything is written.
+function _mat_column(what, col)
+    r = _mat_floats(col)
+    r isa Integer && throw(ArgumentError("save_smite: $what of emitter $r is $(repr(col[r])), which " *
+        "is not a real number a MATLAB double holds exactly; nothing was written"))
+    return r
+end
+
+# The column f(e) for each emitter (a position in SMITE's pixels), single when the emitters' own
+# column `col` is all Float32, so Float32 data stay single, otherwise double. `col` is checked
+# as an emitter column first.
+function _same_float(what, col, f, emitters)
+    own = _mat_column(what, col)
     vals = [f(e) for e in emitters]
-    T = _mat_eltype(col)
-    return T in (Float32, Float64) ? convert(Vector{T}, vals) : _mat_column(vals)
+    return eltype(own) === Float32 ? convert(Vector{Float32}, vals) : Float64[Float64(v) for v in vals]
 end
 
 # A count or index as a MATLAB double, by the loaders' rule (_fits_int, _SMITE_COUNT_MIN) so that

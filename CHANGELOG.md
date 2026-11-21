@@ -34,9 +34,12 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   as a column of defaults.
 - `save_smite` of emitters of `Float32` and `Float64` together (a `Union` element type) wrote
   `Photons`, `Bg`, their errors and `Z`, `Z_SE` as MATLAB cells, which MAT makes of a vector of
-  mixed types, so `load_smite_3d` refused its own file. Such columns are now written as double
-  (a column of only `Float32` values stays single), and 3D data whose `z` mixes `Float32` and
-  `Float64` save their `Z` instead of dropping it with a warning.
+  mixed types, so `load_smite_3d` refused its own file; a 3D file with such cells, loaded in 2D
+  and saved, kept its cell `Z`. Every column is now converted by its values: all `Float32` stays
+  single, anything else is written as double when a double holds every value exactly
+  (integers, `Float16`), and a value that is not real or that a double would round is an
+  `ArgumentError` naming the field and the emitter. 3D data whose `z` mixes `Float32` and
+  `Float64`, or is `Float16`, save their `Z` instead of dropping it with a warning.
 
 ## 0.1.0 (2026-11-16)
 

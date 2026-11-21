@@ -284,8 +284,8 @@ end
     @testset "save_smite against 0.7.0" begin
         # Where 0.7.0 saved, save_smite saves too, keeping every 0.7.0 key and value (positions in
         # SMITE's pixels); it adds the camera's NDims, PixelSize, XSize and YSize, and Z and Z_SE
-        # for non-empty 3D data whose z and σ_z are written as single or double (all Float32, all
-        # Float64, or Float32 and Float64 together, written as double).
+        # for non-empty 3D data whose z and σ_z are real numbers a double holds exactly (single
+        # when all Float32, otherwise double).
         camkeys = ["NDims", "PixelSize", "XSize", "YSize"]
         cam = IdealCamera(1:64, 1:64, 0.1)
         A = SMLMCore.AbstractEmitter
@@ -302,23 +302,24 @@ end
         U3 = Union{Emitter3DFit{Float32}, Emitter3DFit{Float64}}
         unchanged = (sm([e2, e2]), sm([e3, e3]), sm([e3f, e3f]), sm(U3[]), sm(A[]), sm(A[e2, e3]),
                      sm([fz, fz]), sm([hz, hz]), sm([_oddz(missing, 0.02), _oddz(missing, 0.02)]),
-                     sm([_oddz(Float16(0.5), Float16(0.02)), _oddz(Float16(0.5), Float16(0.02))]),
+                     sm([_oddz(big"0.1", 0.02), _oddz(big"0.1", 0.02)]),
                      sm(A[e3, _oddz(missing, 0.02)]))
         for s in unchanged
             @test first(_legacy_compare(s)) == camkeys
         end
         # Float32 and Float64 z together make an AbstractFloat column, which MAT would write as a
-        # cell; it is written as double.
+        # cell, and MAT cannot write Float16 at all; both are written as double.
         widened = (sm(A[e3, e3b]), sm([f3, f3b]), sm([_oddz(0.5, 0.02), _oddz(0.25, 0.03)]),
                    sm([_oddz(0.5f0, 0.02f0), _oddz(0.25f0, 0.03f0)]),
-                   sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]))
+                   sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]),
+                   sm([_oddz(Float16(0.5), Float16(0.02)), _oddz(Float16(0.25), Float16(0.02))]))
         for s in widened
             added, new = _legacy_compare(s)
             @test added == [camkeys; "Z"; "Z_SE"]
             @test new["NDims"] == 3
             @test vec(new["Z"]) == [e.z for e in s.emitters]
             @test vec(new["Z_SE"]) == [e.σ_z for e in s.emitters]
-            @test eltype(new["Z"]) === typeof(first(s.emitters).z)
+            @test eltype(new["Z"]) === (all(e -> e.z isa Float32, s.emitters) ? Float32 : Float64)
         end
     end
 
@@ -331,8 +332,13 @@ end
         mktempdir() do dir
             @test_logs (:warn, r"mixed 2D/3D") save_smite(sm(A[e2, e3]), dir, "m.mat")
             @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(missing, 0.02)]), dir, "o.mat")
-            @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(Float16(0.5), Float16(0.02))]), dir, "h.mat")
-            @test !haskey(matread(joinpath(dir, "h.mat"))["SMD"], "Z")
+            # z that a double would round (BigFloat) is not written
+            @test_logs (:warn, r"not all real numbers a MATLAB double holds exactly: Z not saved") save_smite(
+                sm([_oddz(big"0.1", 0.02)]), dir, "b.mat")
+            @test !haskey(matread(joinpath(dir, "b.mat"))["SMD"], "Z")
+            # Float16 z loses nothing: written as double
+            @test_logs save_smite(sm([_oddz(Float16(0.5), Float16(0.02))]), dir, "h.mat")
+            @test matread(joinpath(dir, "h.mat"))["SMD"]["Z"] === 0.5
             # Float32 and Float64 z together lose nothing: written as double
             @test_logs save_smite(sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]), dir, "f.mat")
             @test eltype(matread(joinpath(dir, "f.mat"))["SMD"]["Z"]) == Float64
@@ -604,5 +610,32 @@ end
         before = read(joinpath(dir, "keep.mat"))
         @test_throws ArgumentError save_smite(sm([a], big, 1), dir, "keep.mat")
         @test read(joinpath(dir, "keep.mat")) == before
+    end
+end
+
+@testset "save_smite writes every emitter column exactly, as single or double" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    sm(es) = AnyCountSMLD(es, cam, 1, 1, Dict{String,Any}())
+    mktempdir() do dir
+        # Integers and Float16 values become doubles exactly (MAT cannot write Float16)
+        save_smite(sm([_anyloc(photons=Int64(1000), bg=Float16(2.5)), _anyloc(photons=1200.0, bg=Float16(3))]),
+                   dir, "ints.mat")
+        smd = matread(joinpath(dir, "ints.mat"))["SMD"]
+        @test smd["Photons"] isa AbstractArray{Float64} && vec(smd["Photons"]) == [1000.0, 1200.0]
+        @test smd["Bg"] isa AbstractArray{Float64} && vec(smd["Bg"]) == [2.5, 3.0]
+        @test [e.photons for e in load_smite_2d(SmiteSMD(dir, "ints.mat")).emitters] == [1000.0, 1200.0]
+        # A value a double would round, or one that is not a real number, is an ArgumentError
+        # naming the emitter (0.1.0 wrote a cell its loader refused); nothing is written
+        for (name, es, msg) in (
+                ("p53.mat", [_anyloc(photons=Int64(2)^53 + 1), _anyloc(photons=1.0)], "photons of emitter 1 is 9007199254740993"),
+                ("bgbig.mat", [_anyloc(), _anyloc(bg=big"0.1")], "bg of emitter 2 is"),
+                ("pmiss.mat", [_anyloc(photons=missing)], "photons of emitter 1 is missing"),
+                ("xbig.mat", [_anyloc(x=big"0.1")], "x of emitter 1 is"),
+                ("pc.mat", [_anyloc(photons=1.0 + 1.0im)], "photons of emitter 1 is 1.0 + 1.0im"))
+            err = try save_smite(sm(es), dir, name); nothing catch ex; ex end
+            @test err isa ArgumentError
+            err isa ArgumentError && @test occursin(msg, err.msg) && occursin("MATLAB double holds exactly", err.msg)
+            @test !isfile(joinpath(dir, name))
+        end
     end
 end

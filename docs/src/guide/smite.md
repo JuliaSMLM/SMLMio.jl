@@ -131,15 +131,18 @@ disk, a lost network share, an interruption) can leave the file partly written, 
 write; the error then says the file is incomplete. The data are unchanged in memory, so save
 again once the cause is fixed. It contains:
 
-- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`.
-  A column whose values are all `Float32` stays MATLAB single; `Float32` and `Float64`
-  values together (emitters of both types in one SMLD) are written as double, never as the
-  cell MAT would write for a mixed vector, which neither SMITE nor the loaders read as numbers.
+- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`. Each
+  column is converted by its values: all `Float32` stays MATLAB single, anything else is
+  written as double. So `Float32` and `Float64` emitters together are written as double, never
+  as the cell MAT would write for a mixed vector (which SMITE cannot compute with), and
+  integers or `Float16` values (which MAT cannot write) become doubles. A value that is not a
+  real number, or that a double would round (a `BigFloat`, an integer above 2^53), is an
+  `ArgumentError` naming the field and the emitter, and nothing is written.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
-  has properties `z` and `σ_z` and whose `z` and `σ_z` columns are each written as single or
-  double, as above (MAT cannot write other types, such as `Float16`). Other non-empty 3D or
-  mixed 2D/3D data save without `Z`, with a warning: an SMD has one `Z` column for all
-  localizations, so save 2D and 3D data separately to keep it.
+  has properties `z` and `σ_z`, converted as above when every `z` and `σ_z` is a real number a
+  double holds exactly. Other non-empty 3D or mixed 2D/3D data save without `Z`, with a
+  warning: an SMD has one `Z` column for all localizations, so save 2D and 3D data separately
+  to keep it.
 - `XSize`, `YSize` and `PixelSize` from the camera (`PixelSize` as single for a `Float32`
   camera, so the file loads back with the same camera), `NFrames`, `NDatasets` and `NDims`; counts
   and indices as doubles, as most SMITE results files hold them. They follow the loaders' rule,
@@ -156,7 +159,8 @@ again once the cause is fixed. It contains:
   each a MATLAB name. Otherwise `save_smite` throws an `ArgumentError` naming every offending
   key, before it writes anything.
 - SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
-  `PValue` still belongs to its localization. An emitter is taken to be the row its `id` names
+  `PValue` still belongs to its localization; one the file held as a cell of numbers is written
+  as a number column, as above. An emitter is taken to be the row its `id` names
   when its frame and photons equal that row's. The fields are written only when every emitter is
   such a row; for combined localizations (frame connection's combined output), changed frames or
   photons, or emitters joined from another file, they are dropped with a warning. Emitters from

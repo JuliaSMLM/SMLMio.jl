@@ -246,6 +246,15 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             smld = load_smite_2d(write_smd(dir, "optempty.mat", s))
             @test [e.track_id for e in smld.emitters] == [0, 0]
             @test "ConnectID" in smld.metadata["smite_defaulted_fields"]
+            # A 3D file with cell Z and Z_SE, loaded in 2D (Z kept in metadata) and saved, writes
+            # them as number columns, so the saved 3D file loads
+            s3 = smite_smd_3d(2); s3["Z"] = Any[0.25f0, 0.5]; s3["Z_SE"] = Any[0.04, Float32(0.05)]
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "cellz.mat", s3)))
+            save_smite(smld, dir, "cellz-saved.mat")
+            saved = matread(joinpath(dir, "cellz-saved.mat"))["SMD"]
+            @test saved["Z"] isa AbstractArray{Float64} && saved["Z_SE"] isa AbstractArray{Float64}
+            @test saved["NDims"] == 3
+            @test [e.z for e in load_smite_3d(SmiteSMD(dir, "cellz-saved.mat")).emitters] == [0.25, 0.5]
             # A cell holding anything but numbers is an ArgumentError naming the field, required
             # or optional (an optional one used to fail later with a MethodError)
             for (key, v) in (("Photons", Any["a", "b"]), ("Y", Any[1.0, zeros(0, 0)]),
