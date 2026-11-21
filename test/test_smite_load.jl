@@ -255,6 +255,29 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test saved["Z"] isa AbstractArray{Float64} && saved["Z_SE"] isa AbstractArray{Float64}
             @test saved["NDims"] == 3
             @test [e.z for e in load_smite_3d(SmiteSMD(dir, "cellz-saved.mat")).emitters] == [0.25, 0.5]
+            # Other per-localization fields keep their MATLAB class: SMITE's IndSMD is a cell, one
+            # entry per localization (even of one index), and ThreshFlag uint32; after a filter too
+            s3 = smite_smd(3); s3["IndSMD"] = Any[1.0, [2.0, 3.0], 4.0]
+            smld = load_smite_2d(write_smd(dir, "indsmd.mat", s3))
+            @test "IndSMD" in smld.metadata["smite_per_localization_fields"]
+            kept = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[[1, 3]], smld.camera,
+                                                             smld.n_frames, smld.n_datasets, smld.metadata)
+            save_smite(kept, dir, "indsmd-saved.mat")
+            saved = matread(joinpath(dir, "indsmd-saved.mat"))["SMD"]
+            @test saved["IndSMD"] isa AbstractArray{Any} && vec(saved["IndSMD"]) == Any[1.0, 4.0]
+            @test eltype(saved["ThreshFlag"]) == UInt32
+            # NDims 3 only when Z and Z_SE are both written, so the file loads in 3D
+            s3 = smite_smd_3d(2)
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zse.mat", s3)))
+            smld.metadata["Z_SE"] = [0.1]                     # no longer one value per file row
+            quiet(() -> save_smite(smld, dir, "zse-saved.mat"))
+            saved = matread(joinpath(dir, "zse-saved.mat"))["SMD"]
+            @test !haskey(saved, "Z_SE") && saved["NDims"] == 2
+            # Z a double would round is an error naming the field and the file row
+            s3 = smite_smd_3d(2); s3["Z"] = Any[Int64(2)^53 + 1, 0.5f0]
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zbig.mat", s3)))
+            @test_throws r"Z of file row 1 is 9007199254740993" save_smite(smld, dir, "zbig-saved.mat")
+            @test !isfile(joinpath(dir, "zbig-saved.mat"))
             # A cell holding anything but numbers is an ArgumentError naming the field, required
             # or optional (an optional one used to fail later with a MethodError)
             for (key, v) in (("Photons", Any["a", "b"]), ("Y", Any[1.0, zeros(0, 0)]),

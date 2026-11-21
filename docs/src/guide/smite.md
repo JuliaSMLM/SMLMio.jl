@@ -159,8 +159,11 @@ again once the cause is fixed. It contains:
   each a MATLAB name. Otherwise `save_smite` throws an `ArgumentError` naming every offending
   key, before it writes anything.
 - SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
-  `PValue` still belongs to its localization; one the file held as a cell of numbers is written
-  as a number column, as above. An emitter is taken to be the row its `id` names
+  `PValue` still belongs to its localization. Each keeps its MATLAB class (SMITE's `IndSMD` is
+  a cell, `ThreshFlag` uint32), except `Z` and `Z_SE`, which `load_smite_2d` keeps from a 3D
+  file: they are written as number columns, as above, exactly or not at all (an
+  `ArgumentError` naming the field and file row), and the file says `NDims` 3 when both are
+  written with one value per localization. An emitter is taken to be the row its `id` names
   when its frame and photons equal that row's. The fields are written only when every emitter is
   such a row; for combined localizations (frame connection's combined output), changed frames or
   photons, or emitters joined from another file, they are dropped with a warning. Emitters from

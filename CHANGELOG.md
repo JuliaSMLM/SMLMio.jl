@@ -35,11 +35,15 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 - `save_smite` of emitters of `Float32` and `Float64` together (a `Union` element type) wrote
   `Photons`, `Bg`, their errors and `Z`, `Z_SE` as MATLAB cells, which MAT makes of a vector of
   mixed types, so `load_smite_3d` refused its own file; a 3D file with such cells, loaded in 2D
-  and saved, kept its cell `Z`. Every column is now converted by its values: all `Float32` stays
-  single, anything else is written as double when a double holds every value exactly
-  (integers, `Float16`), and a value that is not real or that a double would round is an
-  `ArgumentError` naming the field and the emitter. 3D data whose `z` mixes `Float32` and
-  `Float64`, or is `Float16`, save their `Z` instead of dropping it with a warning.
+  and saved, kept its cell `Z`. Every emitter column is now converted by its values: all
+  `Float32` stays single, anything else is written as double when a double holds every value
+  exactly (integers, `Float16`), and a value that is not real or that a double would round is
+  an `ArgumentError` naming the field and the emitter (for `z` and `σ_z` that are not real
+  numbers, such as `missing`, the file is saved without `Z`, with a warning, as before). 3D
+  data whose `z` mixes `Float32` and `Float64`, or is `Float16`, save their `Z` instead of
+  dropping it. `Z` and `Z_SE` kept in the metadata by `load_smite_2d` are written the same way,
+  and the file says `NDims` 3 only when both are written with one value per localization; every
+  other per-localization field keeps its MATLAB class (SMITE's `IndSMD` stays a cell).
 
 ## 0.1.0 (2026-11-16)
 

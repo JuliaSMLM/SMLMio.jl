@@ -172,10 +172,16 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         if key in perloc
             key in towrite || continue
             value = _smite_vec(value)[rows]
-            # A cell of numbers (from a file whose field was one) is written as a number column
-            if !isconcretetype(eltype(value))
+            # Z and Z_SE (kept by load_smite_2d from a 3D file) are coordinates the loaders read as
+            # numbers: written as a number column (a cell of them, as 0.1.0 could write, included),
+            # exactly or not at all. Every other field keeps its MATLAB class: SMITE's IndSMD is a
+            # cell, one entry per localization, and ThreshFlag is uint32.
+            if key in ("Z", "Z_SE")
                 v = _mat_floats(value)
-                v isa Integer || (value = v)
+                v isa Integer && throw(ArgumentError("save_smite: $key of file row $(rows[v]) is " *
+                    "$(repr(value[v])), which is not a real number a MATLAB double holds exactly; " *
+                    "nothing was written"))
+                value = v
             end
         elseif loaded && key in _SMITE_STACKABLE && nsaved > 0 && _smite_length(value) == nsaved
             push!(ambiguous, key)
@@ -187,9 +193,11 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         "per localization, they are not listed in smite_per_localization_fields as one value per file " *
         "row, and with as many values as saved localizations a load would take them for one value per " *
         "localization; list a field there, with one value per file row, to save it by row")
-    # A 3D file loaded as 2D keeps Z in metadata, written back above for each emitter: say 3D
-    zcols === nothing && !isempty(smld.emitters) && haskey(s, "Z") &&
-        _smite_length(s["Z"]) == length(smld.emitters) && (s["NDims"] = 3.0)
+    # A 3D file loaded as 2D keeps Z and Z_SE in metadata, written back above for each emitter: say
+    # 3D when both are there with one value per localization, as load_smite_3d needs
+    zcols === nothing && !isempty(smld.emitters) &&
+        all(k -> haskey(s, k) && _smite_length(s[k]) == length(smld.emitters), ("Z", "Z_SE")) &&
+        (s["NDims"] = 3.0)
     
     # MAT truncates the target before it checks a struct's keys. Check them all first; an
     # existing file is rewritten only once the new contents are complete.
