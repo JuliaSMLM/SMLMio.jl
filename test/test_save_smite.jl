@@ -723,6 +723,15 @@ end
         end
         @test matread(joinpath(dir, "p24.mat"))["SMD"]["PixelSize"] === 10000.1 - 10000.0
         @test matread(joinpath(dir, "bigorigin24.mat"))["SMD"]["X"] === 1.5
+        # ... and leave BigFloat's working precision alone (Julia 1.10 shares it between threads)
+        setprecision(BigFloat, 100) do
+            save_smite(SMLMCore.BasicSMLD([em], cam64, 1, 1), dir, "p100.mat")
+            @test precision(BigFloat) == 100
+        end
+        @test SMLMio._exact_sub(BigFloat(2)^53 + 1, BigFloat(2)^53) === 1.0
+        @test SMLMio._exact_sub(Int8(100), Int8(-100)) === 200.0
+        @test SMLMio._exact_sub(-50.0, Int8(-100)) === 50.0 && SMLMio._exact_sub(-0.75f0, big"-1.5") === 0.75
+        @test SMLMio._exact_sub(big(2)^60 + 2^7 + 1, 0) === 2.0^60 + 2.0^8
         @test_throws r"pixel edges are not all finite" save_smite(
             SMLMCore.BasicSMLD([em], IdealCamera([0.0, Inf], [0.0, 1.0]), 1, 1), dir, "infedge.mat")
         # A large Float32 camera at 0 is rebuilt exactly, and saves

@@ -419,8 +419,6 @@ function _pixel_column(what, col, origin, px)
     T = eltype(own) <: Complex ? Complex{Float64} : Float64
     vals = if origin === nothing
         T[T(v) / px for v in own]
-    elseif Float64(origin) == origin
-        T[(T(v) - Float64(origin)) / px + 0.5 for v in own]
     else
         T[_exact_sub(v, origin) / px + 0.5 for v in own]
     end
@@ -456,16 +454,25 @@ function _smite_metadata(md)
     return _smite_empty_text!(out)
 end
 
-# a - b exactly, rounded once to a Float64 (a ComplexF64 for a complex a), whatever BigFloat's
-# working precision: finite real values are subtracted as rationals, with BigFloat set wide
-# enough for every conversion to be exact; a value that is not finite is subtracted in Float64.
+# a - b rounded once to a Float64 (a ComplexF64 for a complex a), without touching BigFloat's
+# working precision (which Julia 1.10 shares between threads). Float16, Float32 and Float64 convert
+# to Float64 exactly, and IEEE subtraction rounds once. Otherwise integers and binary floats
+# (BigFloat with either) are split exactly into a BigInt significand and a binary exponent
+# (Base.decompose), subtracted as integers and converted once (Float64 of a BigInt rounds to
+# nearest). Other numbers (a Rational) and values that are not finite are converted first and
+# then subtracted.
 function _exact_sub(a::Real, b::Real)
-    (isfinite(a) && isfinite(b)) || return Float64(a) - Float64(b)
-    bits(x) = x isa BigFloat ? precision(x) : 0
-    setprecision(BigFloat, 2 * max(256, bits(a), bits(b))) do
-        Float64(Rational{BigInt}(a) - Rational{BigInt}(b))
-    end
+    ieee = Union{Float16,Float32,Float64}
+    (a isa ieee && b isa ieee) && return Float64(a) - Float64(b)
+    binary = Union{Integer,Float16,Float32,Float64,BigFloat}
+    (a isa binary && b isa binary && isfinite(a) && isfinite(b)) || return Float64(a) - Float64(b)
+    (sa, ea), (sb, eb) = _binary_parts(a), _binary_parts(b)
+    e = min(ea, eb)
+    return ldexp(Float64(sa << (ea - e) - sb << (eb - e)), e)
 end
+_binary_parts(x::Integer) = (BigInt(x), 0)
+# x == s * 2^e / d, with d = ±1 for a finite binary float: the sign is in d
+_binary_parts(x::AbstractFloat) = ((s, e, d) = Base.decompose(x); (BigInt(s) * sign(d), Int(e)))
 _exact_sub(a::Complex, b::Real) = complex(_exact_sub(real(a), b), Float64(imag(a)))
 
 # A count or index as a MATLAB double, by the loaders' rule (_fits_int, _SMITE_COUNT_MIN) so that
