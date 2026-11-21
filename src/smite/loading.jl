@@ -71,7 +71,7 @@ function _smite_pixel_size(where, what, v)
     v isa Number || throw(ArgumentError("$where: $what is not a number"))
     iszero(imag(v)) || throw(ArgumentError("$where: $what $v is not a real number"))
     r = real(v)
-    px = r isa Float32 ? r : Float64(r)
+    px = r isa Float32 ? r : _float64(r)
     isfinite(px) || throw(ArgumentError("$where: $what $px is not finite"))
     px > 0 || throw(ArgumentError("$where: pixel size $px is not positive"))
     return px

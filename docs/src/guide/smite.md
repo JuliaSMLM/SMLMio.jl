@@ -124,7 +124,8 @@ A missing folder, a folder (or anything but a file) of the file's name, a symlin
 name that is no file, an existing file you may not write, too little free space to rewrite one
 (where the system reports it), a camera whose pixels are not uniform and square (its edges,
 relative to its first, are not within a thousandth of a pixel of those the loaders rebuild from
-`XSize`, `YSize` and the written `PixelSize`, the differences of edges taken exactly), whose
+`XSize`, `YSize` and the written `PixelSize`, the differences of edges taken exactly and each
+rounded once to a double, for integer, rational and `BigFloat` edges too), whose
 edges are not all finite, or that
 the loaders could not build back (no pixels along an axis, a first pixel of zero or negative
 width, a pixel size that is not finite as written, or `Float32` edges that round onto each
@@ -178,11 +179,12 @@ again once the cause is fixed. It contains:
   ASCII letter, then up to 62 letters, digits or underscores. A Dict value needs string keys,
   each a MATLAB name. Otherwise `save_smite` throws an `ArgumentError` naming every offending
   key, before it writes anything. Each entry keeps its MATLAB class: a cell stays a cell (one
-  of structs too), and a MATLAB object read by MAT keeps its class. Two things MAT cannot write
-  are changed: an unfilled cell element, which MAT reads as an empty array it cannot write, is
-  written as an empty double array, in a cell or a struct; and a tuple is written as the array
-  it holds. Recent MAT versions read a MATLAB struct array as their own type (`MatlabStructArray`),
-  which is written as it is; one holding an unfilled cell element cannot be saved.
+  of structs too), an array of Dicts a struct array, and a MATLAB object read by MAT keeps its
+  class. Two things MAT cannot write are changed: an unfilled cell element, which MAT reads as
+  an empty array it cannot write, is written as an empty double array, in a cell or a struct;
+  and a tuple is written as the array it holds. Recent MAT versions read a MATLAB struct array
+  or object as their own types (`MatlabStructArray`, `MatlabClassObject`), which are written as
+  they are; one holding an unfilled cell element cannot be saved.
 - SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
   `PValue` still belongs to its localization. Each keeps its MATLAB class (SMITE's `IndSMD` is
   a cell, `ThreshFlag` uint32), except `Z` and `Z_SE`, which `load_smite_2d` keeps from a 3D

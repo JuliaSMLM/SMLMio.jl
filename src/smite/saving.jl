@@ -74,9 +74,10 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # SMITE has one PixelSize, so the camera must be the one the loaders will build from XSize,
     # YSize and the written pixel size (single for a Float32 camera, so the file loads back with a
     # Float32 camera; otherwise double): each edge, relative to the camera's first, within a
-    # thousandth of a pixel of the rebuilt camera's. Differences of edges are taken exactly
-    # (_exact_sub: no overflow in a small integer type, no rounding in Float16, whatever BigFloat's
-    # working precision) and compared in Float64.
+    # thousandth of a pixel of the rebuilt camera's. Differences of edges are taken exactly and
+    # rounded once (_exact_sub: no overflow in a small integer type, no rounding of a Float16 or
+    # rational edge before the subtraction, whatever BigFloat's working precision) and compared in
+    # Float64.
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
     nx, ny = length(ex) - 1, length(ey) - 1
@@ -379,10 +380,12 @@ function _mat_numbers(col)
     bad === nothing || return (bad, :inexact)
     bad = findfirst(x -> !(x isa Number), col)
     bad === nothing || return (bad, :notnumber)
-    all(_is_real, col) && return Float64[Float64(real(x)) for x in col]
-    return ComplexF64[ComplexF64(x) for x in col]
+    all(_is_real, col) && return Float64[_float64(real(x)) for x in col]
+    return ComplexF64[ComplexF64(_float64(real(x)), _float64(imag(x))) for x in col]
 end
-_exact_double(x) = x isa Union{Float32,Float64,ComplexF32,ComplexF64} || isequal(ComplexF64(x), x)
+_exact_double(x) = x isa Union{Float32,Float64,ComplexF32,ComplexF64} ||
+    (_exact_part(real(x)) && _exact_part(imag(x)))
+_exact_part(v) = (f = _float64(v); isnan(f) ? isnan(v) : _same_value(f, v) && signbit(f) == signbit(v))
 # A real number: a Real, or a complex number whose imaginary part is zero
 _is_real(x) = x isa Number && iszero(imag(x))
 
@@ -436,11 +439,12 @@ end
 # A value as MAT can write it, changed only where it must be. MAT reads an unfilled element of a
 # MATLAB cell as an empty array of element type Union{}, which its writer refuses; such an element
 # is written as an empty double array, as SMITE holds an empty field. A tuple (metadata built in
-# Julia) is written as the array it holds; MAT 0.10 refuses tuples. Arrays (cells) and plain Dicts
-# (MATLAB structs) are searched; a changed one is a copy with the same element type when the new
-# values fit it, so a cell of structs stays a cell, and one that needs no change is returned as it
-# is. MAT's own types (a class object, a function handle, a struct array) are written as they are,
-# keeping their MATLAB class.
+# Julia) is written as the array it holds; MAT 0.10 refuses tuples. Arrays (cells, or struct
+# arrays of Dicts) and plain Dicts (MATLAB structs) are searched; a changed one is a copy whose
+# element type is widened only as far as the new values need, so a cell of structs stays a cell
+# and an array of Dicts an array of Dicts, and one that needs no change is returned as it is.
+# MAT's own types (a class object, a function handle, a struct array) are written as they are,
+# keeping their MATLAB class; MAT cannot write one holding an unfilled cell element.
 _mat_writable(v::AbstractArray{Union{}}) = zeros(size(v))
 function _mat_writable(v::AbstractArray)
     eltype(v) <: Union{Number,AbstractString} && return v
@@ -451,7 +455,9 @@ function _mat_writable(v::AbstractArray)
         y = _mat_writable(x)
         y === x && continue
         out === v && (out = copy(v))
-        y isa eltype(out) || (out = Array{Any}(out))
+        # widened only as far as the new value needs: an array of Dicts (a MATLAB struct array)
+        # stays one, a cell stays a cell
+        y isa eltype(out) || (out = Array{typejoin(eltype(out), typeof(y))}(out))
         out[i] = y
     end
     return out
@@ -480,26 +486,66 @@ function _smite_metadata(md)
     return _smite_empty_text!(out)
 end
 
-# a - b rounded once to a Float64 (a ComplexF64 for a complex a), without touching BigFloat's
-# working precision (which Julia 1.10 shares between threads). Float16, Float32 and Float64 convert
-# to Float64 exactly, and IEEE subtraction rounds once. Otherwise integers and binary floats
-# (BigFloat with either) are split exactly into a BigInt significand and a binary exponent
-# (Base.decompose), subtracted as integers and converted once (Float64 of a BigInt rounds to
-# nearest). Other numbers (a Rational) and values that are not finite are converted first and
-# then subtracted.
+# a - b rounded once to the nearest Float64 (a ComplexF64 for a complex a), without touching
+# BigFloat's working precision or rounding mode (which Julia 1.10 shares between threads). When a
+# and b both convert to Float64 exactly (every Float16, Float32 and Float64; most integers), one
+# IEEE subtraction rounds the exact difference once. Otherwise finite integers, rationals and
+# binary floats (BigFloat) are subtracted exactly as fractions of BigInts and rounded once
+# (_round_float64). Other numbers and values that are not finite are converted, then subtracted.
 function _exact_sub(a::Real, b::Real)
-    ieee = Union{Float16,Float32,Float64}
-    (a isa ieee && b isa ieee) && return Float64(a) - Float64(b)
-    binary = Union{Integer,Float16,Float32,Float64,BigFloat}
-    (a isa binary && b isa binary && isfinite(a) && isfinite(b)) || return Float64(a) - Float64(b)
-    (sa, ea), (sb, eb) = _binary_parts(a), _binary_parts(b)
-    e = min(ea, eb)
-    return ldexp(Float64(sa << (ea - e) - sb << (eb - e)), e)
+    fa, fb = _float64(a), _float64(b)
+    _same_value(fa, a) && _same_value(fb, b) && return fa - fb
+    exact = Union{Integer,Rational,Float16,Float32,Float64,BigFloat}
+    (a isa exact && b isa exact && isfinite(a) && isfinite(b)) || return fa - fb
+    (na, da), (nb, db) = _fraction(a), _fraction(b)
+    return _round_float64(na * db - nb * da, da * db)
 end
-_binary_parts(x::Integer) = (BigInt(x), 0)
+_exact_sub(a::Complex, b::Real) = complex(_exact_sub(real(a), b), _float64(imag(a)))
+
+# x as (numerator, denominator), BigInts with the denominator positive, exactly
+_fraction(x::Integer) = (BigInt(x), big(1))
+_fraction(x::Rational) = (BigInt(numerator(x)), BigInt(denominator(x)))
 # x == s * 2^e / d, with d = ±1 for a finite binary float: the sign is in d
-_binary_parts(x::AbstractFloat) = ((s, e, d) = Base.decompose(x); (BigInt(s) * sign(d), Int(e)))
-_exact_sub(a::Complex, b::Real) = complex(_exact_sub(real(a), b), Float64(imag(a)))
+function _fraction(x::AbstractFloat)
+    s, e, d = Base.decompose(x)
+    n = BigInt(s) * sign(d)
+    return e >= 0 ? (n << e, big(1)) : (n, big(1) << -e)
+end
+
+# The Float64 nearest num / den (den > 0), ties to even, as IEEE rounds: subnormal results keep
+# fewer bits, and a value beyond the largest double is infinite. Integer arithmetic only.
+function _round_float64(num::BigInt, den::BigInt)
+    iszero(num) && return 0.0
+    m = abs(num)
+    # A quotient of at least 56 bits, the remainder folded into its last bit (sticky), so that it
+    # rounds as the exact value does: value = q * 2^e, up to the sticky bit
+    k = max(0, 56 + ndigits(den; base=2) - ndigits(m; base=2))
+    q, r = divrem(m << k, den)
+    q = 2q + !iszero(r)
+    e = -k - 1
+    nq = ndigits(q; base=2)
+    E = nq - 1 + e                       # 2^E <= value < 2^(E + 1)
+    p = min(53, E + 1075)                # bits a double keeps at that exponent (2^-1074 the least)
+    p < 0 && return copysign(0.0, num)   # below half the least subnormal
+    shift = nq - p                       # at least 3
+    t = q >> shift
+    rest = q - (t << shift)
+    half = big(1) << (shift - 1)
+    (rest > half || (rest == half && isodd(t))) && (t += 1)
+    v = ldexp(Float64(t), e + shift)     # exact: t has at most p bits, or is 2^p
+    return num < 0 ? -v : v
+end
+
+# x as a Float64, rounded to nearest once: a Rational through _round_float64 (Julia converts a
+# Rational{BigInt} through BigFloat at its working precision), anything else by Float64.
+_float64(x::Rational) = isfinite(x) ? _round_float64(_fraction(x)...) : Float64(x)
+_float64(x::Real) = Float64(x)
+
+# Whether the Float64 f equals x exactly. Julia 1.10 compares a float with a Rational{BigInt}
+# through BigFloat at its working precision, so a finite Rational is compared as a fraction.
+_same_value(f::Float64, x::Rational) = isfinite(f) && isfinite(x) ?
+    ((nf, df) = _fraction(f); nf * denominator(x) == BigInt(numerator(x)) * df) : f == x
+_same_value(f::Float64, x::Real) = f == x
 
 # A count or index as a MATLAB double, by the loaders' rule (_fits_int, _SMITE_COUNT_MIN) so that
 # every file save_smite writes loads: a whole number in Int's range, at least `lo`, that a double
@@ -508,14 +554,14 @@ _exact_sub(a::Complex, b::Real) = complex(_exact_sub(real(a), b), Float64(imag(a
 function _mat_count(what, v, key)
     lo = _SMITE_COUNT_MIN[key]
     _mat_count_ok(v, lo) || _bad_count(what, v, lo)
-    return Float64(real(v))
+    return _float64(real(v))
 end
 function _mat_counts(what, vals)
     bad = findfirst(v -> !_mat_count_ok(v, typemin(Int)), vals)
     bad === nothing || _bad_count("$what of emitter $bad", vals[bad], typemin(Int))
-    return Float64[Float64(real(v)) for v in vals]
+    return Float64[_float64(real(v)) for v in vals]
 end
-_mat_count_ok(v, lo) = _fits_int(v) && real(v) >= lo && Float64(real(v)) == real(v)
+_mat_count_ok(v, lo) = _fits_int(v) && real(v) >= lo && _same_value(_float64(real(v)), real(v))
 function _bad_count(what, v, lo)
     bound = lo == typemin(Int) ? "" : " of at least $lo"
     throw(ArgumentError("save_smite: $what is $(repr(v)); SMITE stores it as a MATLAB double, so " *

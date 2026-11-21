@@ -50,8 +50,9 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   computed in `Float64` from the written pixel size, where a `Float32` camera rounded them, and
   each finite one must load back finite (a non-zero uncertainty also not as 0); `save_smite`
   refuses a camera whose edges are not, within a thousandth of a pixel, those its loaders rebuild
-  from the written pixel size, edges subtracted exactly whatever BigFloat's working precision,
-  without changing it
+  from the written pixel size, edges (integer, rational or `BigFloat` ones too) subtracted
+  exactly and each difference rounded once, whatever BigFloat's working precision, without
+  changing it
   (the check rounded in the camera's own
   type, so a `Float32` camera far from the origin or a `Float16` one passed and loaded back with
   other edges, and an integer grid could overflow), or that they
@@ -71,9 +72,10 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   cell element, which MAT reads as an array it cannot write, is written as an empty double
   array (0.1.0 failed to save such a file), in a cell or a struct-valued field too, and a tuple
   in the metadata is written as the array it holds (MAT 0.10 refused it). Other metadata keeps
-  its MATLAB class as in 0.1.0: a cell of structs stays a cell and a MATLAB object its class. A
-  MATLAB struct array that recent MAT versions read as a `MatlabStructArray` is written as it is,
-  so one holding an unfilled cell element still cannot be saved.
+  its MATLAB class as in 0.1.0: a cell of structs stays a cell, an array of Dicts a struct
+  array, and a MATLAB object its class. A MATLAB struct array or object that recent MAT versions
+  read as their own types (`MatlabStructArray`, `MatlabClassObject`) is written as it is, so one
+  holding an unfilled cell element still cannot be saved.
 - `load_smite_2d` warned that it leaves `Z` out only for a file marked `NDims` 3, but SMITE marks
   its own 3D fits `NDims` 2; it now warns when `Z` and `Z_SE` hold one number per localization.
 

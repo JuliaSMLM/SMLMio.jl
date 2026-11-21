@@ -732,6 +732,37 @@ end
         @test SMLMio._exact_sub(Int8(100), Int8(-100)) === 200.0
         @test SMLMio._exact_sub(-50.0, Int8(-100)) === 50.0 && SMLMio._exact_sub(-0.75f0, big"-1.5") === 0.75
         @test SMLMio._exact_sub(big(2)^60 + 2^7 + 1, 0) === 2.0^60 + 2.0^8
+        # The exact difference is rounded once, whatever its operands' exponents: an emitter at 0.0
+        # on an integer camera, and a BigFloat difference that is not a double
+        cint = IdealCamera([-1, 0, 1], [0, 1])
+        e0 = Emitter2DFit{Float64}(0.0, 0.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+        @test_logs (:warn, r"first pixel edge") save_smite(SMLMCore.BasicSMLD([e0], cint, 1, 1), dir, "int0.mat")
+        smd = matread(joinpath(dir, "int0.mat"))["SMD"]
+        @test smd["X"] === 1.5 && smd["PixelSize"] === 1.0
+        @test SMLMio._exact_sub(0.0, -1) === 1.0 && SMLMio._exact_sub(nextfloat(0.0), big(0)) === nextfloat(0.0)
+        @test SMLMio._exact_sub(BigFloat(1) + BigFloat(2)^-53, -BigFloat(2)^-1000) === nextfloat(1.0)
+        # Rational edges are subtracted before rounding, whatever BigFloat's working precision (Julia
+        # converts a Rational{BigInt} through BigFloat): a camera 1/10 by 199/2000 µm is not square,
+        # and one of 1/10 by 1/10 µm at 10000 µm has pitch 0.1 and an emitter at 10000.0625 at X 1.125
+        q0 = big(10000) // 1
+        qx = [q0, q0 + big(1) // 10]
+        setprecision(BigFloat, 24) do
+            @test_throws r"not uniform and square" save_smite(
+                SMLMCore.BasicSMLD([em], IdealCamera(qx, [q0, q0 + big(199) // 2000]), 1, 1), dir, "qnonsq.mat")
+            eq = Emitter2DFit{Float64}(10000.0625, 10000.05, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+            @test_logs (:warn, r"first pixel edge") save_smite(
+                SMLMCore.BasicSMLD([eq], IdealCamera(qx, qx), 1, 1), dir, "qsq.mat")
+            # a rational a double holds exactly is written, and a rational pitch rounds once
+            @test SMLMio._exact_double(big(4294967297) // 4294967296)
+            @test SMLMio._exact_sub(1 + big(1) // big(2)^53 + big(1) // big(2)^600, 0) === nextfloat(1.0)
+        end
+        smd = matread(joinpath(dir, "qsq.mat"))["SMD"]
+        @test smd["PixelSize"] === 0.1 && smd["X"] === 1.125
+        # Rounding to nearest, ties to even, subnormal and overflowing results included
+        r64 = SMLMio._round_float64
+        @test r64(big(1), big(3)) === 1 / 3 && r64(big(-2)^53 - 1, big(1)) === -2.0^53
+        @test r64(big(2)^53 + 3, big(1)) === 2.0^53 + 4 && r64(big(3), big(2)^1076) === nextfloat(0.0)
+        @test r64(big(1), big(2)^1075) === 0.0 && r64(big(2)^1024, big(1)) === Inf
         @test_throws r"pixel edges are not all finite" save_smite(
             SMLMCore.BasicSMLD([em], IdealCamera([0.0, Inf], [0.0, 1.0]), 1, 1), dir, "infedge.mat")
         # A large Float32 camera at 0 is rebuilt exactly, and saves
@@ -855,6 +886,15 @@ end
         unfilled = Any[Matrix{Union{}}(undef, 0, 0), Dict{String,Any}("g" => 1.0)]
         w = SMLMio._mat_writable(unfilled)
         @test w isa Vector{Any} && w[1] == zeros(0, 0) && w[2] === unfilled[2]
+        # An array of Dicts (a MATLAB struct array) whose values change (tuples made arrays) stays
+        # an array of Dicts, written as a struct array as one without tuples is (MAT 0.10 writes
+        # both as cells)
+        tup = [Dict("gain" => (1.0, 2.0)), Dict("gain" => (3.0, 4.0))]
+        @test SMLMio._mat_writable(tup) isa Vector{<:Dict}
+        plain = [Dict{String,Any}("gain" => 1.0), Dict{String,Any}("gain" => 2.0)]
+        save_smite(SMLMCore.BasicSMLD([e], cam, 1, 1, Dict{String,Any}("A" => tup, "B" => plain)), dir, "sa.mat")
+        r = matread(joinpath(dir, "sa.mat"))["SMD"]
+        @test typeof(r["A"]) == typeof(r["B"])
         @test unfilled[1] isa Matrix{Union{}}
         # A MATLAB class object (MAT 0.12 and later read one as a MatlabClassObject) keeps its class
         if isdefined(MAT, :MatlabClassObject)
