@@ -691,7 +691,8 @@ end
         # A camera origin that is not a double is subtracted exactly
         big0 = BigFloat(2)^53 + 1
         camb = IdealCamera(collect(big0 .+ (0:4)), collect(BigFloat(0):4))
-        save_smite(AnyCountSMLD([_anyloc(x=Float64(2)^53 + 2)], camb, 1, 1, Dict{String,Any}()), dir, "bigorigin.mat")
+        @test_logs (:warn, r"first pixel edge is at") save_smite(
+            AnyCountSMLD([_anyloc(x=Float64(2)^53 + 2)], camb, 1, 1, Dict{String,Any}()), dir, "bigorigin.mat")
         @test matread(joinpath(dir, "bigorigin.mat"))["SMD"]["X"] === 1.5
         # A camera whose edges are not those the loaders rebuild from the written pixel size is
         # refused: equal edges, a Float32 camera whose stored spacing far from the origin is not
