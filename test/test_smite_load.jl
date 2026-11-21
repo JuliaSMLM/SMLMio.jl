@@ -650,15 +650,19 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             save_smite(a, dir, "b.mat")
             saved = matread(joinpath(dir, "b.mat"))["SMD"]
             @test isempty(saved["ConnectID"])
-            # MAT 0.10 reads an empty MATLAB char field ('') as empty text: it is written back
-            # empty too, an empty-text scalar is an absent one, and an empty-text column is empty
+            # MAT 0.10 and 0.11 read an empty MATLAB char field ('') as empty text: SMITE's own
+            # fields become empty arrays as the file is read; any other field keeps its text, and
+            # an empty-text ConnectID set by hand is written back empty
             a.metadata["ConnectID"] = ""
             save_smite(a, dir, "b-text.mat")
             @test isempty(matread(joinpath(dir, "b-text.mat"))["SMD"]["ConnectID"])
             @test SMLMio._smite_scalar("f", Dict{String,Any}("PixelSize" => ""), "PixelSize") === nothing
             @test SMLMio._smite_scalar("f", Dict{String,Any}("XSize" => zeros(0, 0)), "XSize") === nothing
-            @test SMLMio._smite_length("") == 0 && SMLMio._smite_numeric("") == Float64[]
-            @test SMLMio._smite_length("x") == -1 && SMLMio._smite_numeric("x") === nothing
+            read = Dict{String,Any}("PValue" => "", "Z" => "", "X" => "", "PixelSize" => "",
+                                    "NFrames" => "", "Comment" => "", "Label" => "x")
+            SMLMio._smite_empty_text!(read)
+            @test all(k -> read[k] == zeros(0, 0), ("PValue", "Z", "X", "PixelSize", "NFrames"))
+            @test read["Comment"] == "" && read["Label"] == "x"
             # A per-dataset value is not one per localization: the saved column is the NaN that
             # loaded, never the per-dataset numbers, which a later load could take for
             # per-localization uncertainties.

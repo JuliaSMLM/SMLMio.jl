@@ -14,7 +14,6 @@ end
 # MAT reads a 1x1 field as a scalar and an empty field as a 0x0 matrix.
 _smite_length(v::AbstractArray) = length(v)
 _smite_length(::Number) = 1
-_smite_length(v::AbstractString) = isempty(v) ? 0 : -1   # empty text: an empty field (MAT 0.10)
 _smite_length(_) = -1
 _smite_vec(v::AbstractArray) = vec(v)
 _smite_vec(v::Number) = [v]
@@ -25,16 +24,29 @@ _smite_vec(v::Number) = [v]
 # is used: promoting them to one type could round them (an Int64 with a Float32 gives Float32).
 function _smite_numeric(v)
     v isa Number && return [v]
-    v isa AbstractString && isempty(v) && return Float64[]
     v isa AbstractArray || return nothing
     v isa AbstractArray{<:Number} && return vec(v)
     all(x -> x isa Number, v) || return nothing
     return Number[x for x in vec(v)]
 end
 
-# A field left empty: a 0 x 0 matrix, an empty cell, or empty text (MAT 0.10 reads an empty MATLAB
-# char field, '', as "", later versions as an empty array; an empty double is an empty array in all).
+# A field left empty: a 0 x 0 matrix, an empty cell, or empty text.
 _smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
+
+# SMITE's scalar fields the loaders read.
+const _SMITE_SCALARS = ("PixelSize", "XSize", "YSize", "NFrames", "NDatasets", "NDims", "ZSize")
+
+# MAT 0.10 and 0.11 read an empty MATLAB char field ('') as empty text, later versions as an empty
+# array (an empty double, which SMITE writes, is an empty array in every version). SMITE's own
+# fields, the ones the loaders read, are made an empty array here, once, so every rule sees one
+# kind of empty field; any other field keeps the class the file gave it.
+function _smite_empty_text!(s)
+    for k in collect(keys(s))
+        (k in _SMITE_STACKABLE || k in _SMITE_SCALARS) && s[k] isa AbstractString && isempty(s[k]) &&
+            (s[k] = zeros(0, 0))
+    end
+    return s
+end
 
 # A scalar field (XSize, PixelSize, ...) as the file stores it, or nothing when it is absent or
 # empty; the caller checks it before converting it. Several values, or a value that is not a
@@ -42,7 +54,6 @@ _smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
 function _smite_scalar(where, s, key)
     v = get(s, key, nothing)
     v === nothing && return nothing
-    # Empty: a 0 x 0 matrix, or the empty text MAT 0.10 reads for an empty char field
     _smite_empty(v) && return nothing
     k = _smite_length(v)
     k == 1 && first(v) isa Number && return first(v)
@@ -107,6 +118,7 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
         read(file, smd.varname)
     end
     s isa AbstractDict || throw(ArgumentError("$(smd.filename): $(smd.varname) is not a structure"))
+    _smite_empty_text!(s)
     where = "$(smd.filename) ($(smd.varname))"
 
     haskey(s, "X") || throw(ArgumentError("$where has no X field"))
