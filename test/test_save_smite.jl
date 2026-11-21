@@ -703,6 +703,16 @@ end
             @test_throws r"not uniform and square" save_smite(SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name)
             @test !isfile(joinpath(dir, name))
         end
+        # Edges are subtracted exactly: Float16 edges offset from a pixel boundary round onto
+        # another grid (refused), and an exact Int8 grid away from 0 does not overflow (saved)
+        p16 = Float16(0.125)
+        @test_throws r"not uniform and square" save_smite(SMLMCore.BasicSMLD([em],
+            IdealCamera(Float16[0, p16], Float16.(0:65) .* p16 .- Float16(0.003)), 1, 1), dir, "f16off.mat")
+        int8 = IdealCamera(collect(Int8(-100):Int8(100)), Int8[0, 1])
+        e8 = Emitter2DFit{Float64}(-50.0, 0.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
+        @test_logs (:warn, r"first pixel edge is at") save_smite(SMLMCore.BasicSMLD([e8], int8, 1, 1), dir, "int8.mat")
+        smd = matread(joinpath(dir, "int8.mat"))["SMD"]
+        @test smd["XSize"] == 200 && smd["YSize"] == 1 && smd["PixelSize"] === 1.0 && smd["X"] === 50.5
         # A large Float32 camera at 0 is rebuilt exactly, and saves
         save_smite(SMLMCore.BasicSMLD([em], IdealCamera(4096, 4096, 0.1f0), 1, 1), dir, "big32.mat")
         @test load_smite_2d(SmiteSMD(dir, "big32.mat")).camera.pixel_edges_x == IdealCamera(4096, 4096, 0.1f0).pixel_edges_x

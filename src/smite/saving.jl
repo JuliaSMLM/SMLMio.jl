@@ -74,19 +74,22 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # SMITE has one PixelSize, so the camera must be the one the loaders will build from XSize,
     # YSize and the written pixel size (single for a Float32 camera, so the file loads back with a
     # Float32 camera; otherwise double): each edge, relative to the camera's first, within a
-    # thousandth of a pixel of the rebuilt camera's. The difference is taken in the edges' own type
-    # (exact for a BigFloat origin, the stored spacing for a Float32 camera) and compared in Float64.
+    # thousandth of a pixel of the rebuilt camera's. Differences of edges are taken exactly (in
+    # BigFloat or BigInt, so a small integer or Float16 type neither overflows nor rounds) and
+    # compared in Float64.
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
     nx, ny = length(ex) - 1, length(ey) - 1
     nx >= _SMITE_COUNT_MIN["XSize"] && ny >= _SMITE_COUNT_MIN["YSize"] || throw(ArgumentError(
-        "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must each be at least 1"))
+        "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must be at least " *
+        "$(_SMITE_COUNT_MIN["XSize"]) and $(_SMITE_COUNT_MIN["YSize"])"))
     x0, y0 = ex[1], ey[1]
-    px = ex[2] - ex[1]
-    pxw = _smite_pixel_size("save_smite", "the camera's pixel size", eltype(ex) === Float32 ? px : Float64(px))
+    px = big(ex[2]) - big(ex[1])
+    pxw = _smite_pixel_size("save_smite", "the camera's pixel size", eltype(ex) === Float32 ? Float32(px) : Float64(px))
     rebuilt = _smite_camera("save_smite", nx, ny, pxw)
     pxf = Float64(pxw)
-    same(edges, e0, re) = all(k -> abs(Float64(edges[k] - e0) - Float64(re[k])) <= pxf / 1000, eachindex(edges))
+    same(edges, e0, re) = all(k -> abs(Float64(big(edges[k]) - big(e0)) - Float64(re[k])) <= pxf / 1000,
+                              eachindex(edges))
     same(ex, x0, rebuilt.pixel_edges_x) && same(ey, y0, rebuilt.pixel_edges_y) ||
         throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels are " *
                             "not uniform and square (its edges are not those of $nx × $ny pixels of " *
