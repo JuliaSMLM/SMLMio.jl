@@ -72,16 +72,20 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   cell element, which MAT reads as an array it cannot write, is written as an empty double
   array (0.1.0 failed to save such a file), in a cell or a struct-valued field too, and a tuple
   in the metadata is written as the array it holds (MAT 0.10 refused it). Other metadata keeps
-  its MATLAB class as in 0.1.0: a cell of structs stays a cell, an array of Dicts a struct
-  array, and a MATLAB object its class. A MATLAB struct array or object that recent MAT versions
+  its MATLAB class as in 0.1.0: a cell of structs stays a cell, an array of Dicts an array of
+  Dicts (a struct array with MAT 0.13, a cell with MAT 0.10), and a MATLAB object its class. A MATLAB struct array or object that recent MAT versions
   read as their own types (`MatlabStructArray`, `MatlabClassObject`) is written as it is, so one
   holding an unfilled cell element still cannot be saved.
 - `load_smite_2d` warned that it leaves `Z` out only for a file marked `NDims` 3, but SMITE marks
   its own 3D fits `NDims` 2; it now warns when `Z` and `Z_SE` hold one number per localization.
-- `save_smite` named its temporary file from the clock, so saves running at once on several
-  threads could share one: a save failed, or wrote another save's data, and an existing target
-  could lose its contents. Each save now has its own temporary file (a counter all threads
-  share).
+- `save_smite` named its temporary file from the process id and the clock, so saves running at
+  once on several threads, or in processes that share the temporary folder and a process id
+  (containers), could share one: a save could fail, or return normally having written a file
+  that does not load or holds another save's data, and an existing target could lose its
+  contents. Each save now writes in a new folder of its own (`mktempdir`).
+  An interrupt during the final copy into an existing file is now passed on after a warning that
+  the file is incomplete, as other errors there say. The guide says that HDF5.jl before 0.16.13
+  does not lock its calls, so with those versions saves run one at a time.
 
 ## 0.1.0 (2026-11-16)
 

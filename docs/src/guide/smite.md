@@ -138,14 +138,17 @@ The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the load
 holds no `SMF`, so SMITE tools that also load an `SMF` need one from the original results file.
 The file is written in full to a temporary file in the system's temporary folder (`tempdir()`,
 which `TMPDIR` sets on Linux and macOS; it must exist and have room for one copy) and only then
-copied into place. Each save has its own temporary file, so saves of different files can run at
-once on several threads (with HDF5.jl 0.14, the oldest MAT allows, HDF5 itself is not safe to use
-from several threads at once). A save that fails while writing (MAT
+copied into place. Each save writes in a new folder of its own there, so saves of different
+files never share a temporary file, from several threads or from several processes (containers
+sharing the folder included). HDF5.jl before 0.16.13 does not lock its calls into the HDF5
+library, so with those versions (MAT allows HDF5.jl 0.14 and later) save from one thread at a
+time. A save that fails while writing (MAT
 refusing a value, the file held open by HDF5 in the same session) leaves an existing file as it
 was and creates none. An existing file keeps its owner, permissions and links, as with a direct
 write (for a symlink, the file it points to is rewritten). An error during the final copy (a full
 disk, a lost network share, an interruption) can leave the file partly written, as with a direct
-write; the error then says the file is incomplete. The data are unchanged in memory, so save
+write; the error then says the file is incomplete (an interruption is passed on as it is, after a
+warning that says so). The data are unchanged in memory, so save
 again once the cause is fixed. It contains:
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`. Each
@@ -181,8 +184,9 @@ again once the cause is fixed. It contains:
   ASCII letter, then up to 62 letters, digits or underscores. A Dict value needs string keys,
   each a MATLAB name. Otherwise `save_smite` throws an `ArgumentError` naming every offending
   key, before it writes anything. Each entry keeps its MATLAB class: a cell stays a cell (one
-  of structs too), an array of Dicts a struct array, and a MATLAB object read by MAT keeps its
-  class. Two things MAT cannot write are changed: an unfilled cell element, which MAT reads as
+  of structs too), an array of Dicts stays an array of Dicts (which MAT 0.13 writes as a struct
+  array and MAT 0.10 as a cell), and a MATLAB object read by MAT keeps its class. Two things MAT
+  cannot write are changed: an unfilled cell element, which MAT reads as
   an empty array it cannot write, is written as an empty double array, in a cell or a struct;
   and a tuple is written as the array it holds. Recent MAT versions read a MATLAB struct array
   or object as their own types (`MatlabStructArray`, `MatlabClassObject`), which are written as

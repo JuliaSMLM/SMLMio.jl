@@ -426,13 +426,17 @@ end
         # The temporary copies live in the system's temporary folder: none may be left there
         ours() = filter(startswith("smlmio-$(getpid())-"), readdir(tempdir()))
         @testset "saves running at once never share a temporary file" begin
-            # Named from a counter all threads share, not the clock, which two saves on different
-            # threads can read at the same nanosecond
+            # Each save writes in a new folder of its own (mkdtemp), not at a name from the clock,
+            # which two threads can read at the same nanosecond, nor from a process id, which
+            # processes in different containers sharing the folder can have in common
             names = fill("", 256)
             Threads.@threads for i in eachindex(names)
-                names[i] = SMLMio._tmp_path()
+                names[i] = SMLMio._staging_dir()
             end
-            @test allunique(names) && all(startswith(joinpath(tempdir(), "smlmio-$(getpid())-")), names)
+            @test allunique(names) && all(isdir, names) && all(isempty ∘ readdir, names)
+            @test all(startswith(joinpath(tempdir(), "smlmio-$(getpid())-")), names)
+            foreach(rm, names)
+            @test isempty(ours())
         end
         @testset "a new file whose write fails is not left behind" begin
             @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "new.mat")
@@ -473,6 +477,11 @@ end
             @test occursin("incomplete", err.msg) && occursin("save again", err.msg) &&
                   occursin("disk full", err.msg)
             @test read(joinpath(dir, "r.mat"), String) == "partial"
+            @test isempty(ours())
+            # An interrupt is passed on as it is, after a warning that says the same
+            interrupted(src, dst) = (write(dst, "partial"); throw(InterruptException()))
+            @test_logs (:warn, r"incomplete.*save again.*interrupted") @test_throws InterruptException SMLMio._write_smd(
+                joinpath(dir, "r.mat"), s; copy=interrupted)
             @test isempty(ours())
         end
     end

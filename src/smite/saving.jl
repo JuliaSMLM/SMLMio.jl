@@ -256,7 +256,8 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     return nothing
 end
 
-# The whole file is written to a temporary file first and copied into place only when complete,
+# The whole file is written to a temporary file first (in a folder of its own, _staging_dir) and
+# copied into place only when complete,
 # in place so that an existing file keeps its owner, group, permissions and links; the guide's
 # SMITE files page states the rules. `copy` is a seam for tests.
 function _write_smd(target::String, s; copy=_copy_into)
@@ -281,7 +282,8 @@ function _write_smd(target::String, s; copy=_copy_into)
                                 Libc.strerror(e.errnum)))
         end
     end
-    tmp = _tmp_path()
+    stage = _staging_dir()
+    tmp = joinpath(stage, "SMD.mat")
     try
         matwrite(tmp, Dict("SMD" => s))
         if existed
@@ -294,23 +296,25 @@ function _write_smd(target::String, s; copy=_copy_into)
         catch e
             # A new file that could not be finished is removed
             existed || (try rm(target; force=true) catch end; rethrow())
-            e isa InterruptException && rethrow()
-            # An existing file was truncated: say so, and that the data can be saved again
-            error("save_smite: writing $(repr(target)) failed partway, so that file is now " *
+            # An existing file was truncated: say so, and that the data can be saved again (an
+            # interrupt in a warning, and passed on as it is)
+            msg = "save_smite: writing $(repr(target)) failed partway, so that file is now " *
                   "incomplete and its old contents are gone. The data are unchanged in memory: " *
-                  "save again once the cause is fixed. The error was: $(sprint(showerror, e))")
+                  "save again once the cause is fixed."
+            e isa InterruptException && (@warn("$msg The save was interrupted."); rethrow())
+            error("$msg The error was: $(sprint(showerror, e))")
         end
     finally
-        rm(tmp; force=true)
+        rm(stage; recursive=true, force=true)
     end
     return nothing
 end
 
-# A temporary file name no other save of this process uses, also when saves run at once on
-# several threads (a name from the clock could be the same for two of them): the process id and
-# a counter all threads share.
-const _TMP_SEQ = Threads.Atomic{Int}(0)
-_tmp_path() = joinpath(tempdir(), string("smlmio-", getpid(), "-", Threads.atomic_add!(_TMP_SEQ, 1), ".tmp"))
+# A folder of this save's own in the system's temporary folder, created with a name no other save
+# uses, of this process or another: saves on several threads, or processes that share the
+# folder and a process id (containers), each get their own (mkdtemp makes a new folder, never
+# an existing one).
+_staging_dir() = mktempdir(tempdir(); prefix=string("smlmio-", getpid(), "-"), cleanup=false)
 
 # Copies the file `src` into `dst` in place (truncating it, or creating it).
 function _copy_into(src, dst)
