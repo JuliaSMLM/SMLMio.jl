@@ -125,8 +125,10 @@ again once the cause is fixed. It contains:
   3D or mixed 2D/3D data save without `Z`, with a warning: an SMD has one `Z` column for all
   localizations, so save 2D and 3D data separately to keep it.
 - `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
-  and indices as doubles, as most SMITE results files hold them. SMITE has one pixel size, so a
-  camera whose pixels are not uniform and square is an error.
+  and indices as doubles, as most SMITE results files hold them. A double holds every whole
+  number only up to 2^53, so a larger `n_frames`, `n_datasets`, `frame`, `dataset` or
+  `track_id` is an `ArgumentError` naming it, and nothing is written. SMITE has one pixel size,
+  so a camera whose pixels are not uniform and square is an error.
 - every metadata entry that is not an emitter column, except the loaders' own: `original_file`,
   `data_size`, `pixel_size`, `smite_defaulted_fields`, `smite_per_localization_fields`,
   `smite_row_frames`, `smite_row_photons`, `complex_fields_removed`, `complex_fields`,

@@ -102,14 +102,14 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s["Bg_SE"] = [e.σ_bg for e in smld.emitters]
     
     # Counts and indices are doubles, as most SMITE results files hold them (MATLAB integer arithmetic
-    # rounds)
-    s["FrameNum"] = Float64[e.frame for e in smld.emitters]
-    s["DatasetNum"] = Float64[e.dataset for e in smld.emitters]
-    s["ConnectID"] = Float64[e.track_id for e in smld.emitters]
+    # rounds); one a double cannot hold exactly is an error, not a rounded value
+    s["FrameNum"] = _mat_doubles("frame", [e.frame for e in smld.emitters])
+    s["DatasetNum"] = _mat_doubles("dataset", [e.dataset for e in smld.emitters])
+    s["ConnectID"] = _mat_doubles("track_id", [e.track_id for e in smld.emitters])
 
     # Add metadata: what the loaders need to read the file back, from the camera
-    s["NFrames"] = Float64(smld.n_frames)
-    s["NDatasets"] = Float64(smld.n_datasets)
+    s["NFrames"] = _mat_double("n_frames", smld.n_frames)
+    s["NDatasets"] = _mat_double("n_datasets", smld.n_datasets)
     s["XSize"] = Float64(length(ex) - 1)
     s["YSize"] = Float64(length(ey) - 1)
     s["PixelSize"] = Float64(px)
@@ -308,3 +308,19 @@ function _same_float(col, f, emitters)
     T = eltype(col)
     return T in (Float32, Float64) ? convert(Vector{T}, vals) : vals
 end
+
+# A count or index as a MATLAB double. A double holds every whole number only up to 2^53, so an
+# integer it cannot hold exactly is an ArgumentError rather than a silently rounded value.
+function _mat_double(what, v)
+    d = Float64(v)
+    v isa Integer && d != v && _inexact_double(what, v)
+    return d
+end
+function _mat_doubles(what, vals)
+    out = Float64[Float64(v) for v in vals]
+    bad = findfirst(i -> vals[i] isa Integer && out[i] != vals[i], eachindex(vals))
+    bad === nothing || _inexact_double("$what of emitter $bad", vals[bad])
+    return out
+end
+_inexact_double(what, v) = throw(ArgumentError("save_smite: $what $v cannot be stored exactly as " *
+    "a MATLAB double (SMITE stores counts and indices as doubles, exact up to 2^53); nothing was written"))

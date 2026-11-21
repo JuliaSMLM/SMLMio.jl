@@ -510,3 +510,33 @@ end
     @test repr(eval(Meta.parse(repr(smd)))) == repr(smd)   # it reads as the constructor call it is
     @test occursin("/a/b/c", sprint(show, MIME("text/plain"), smd))
 end
+
+@testset "save_smite writes counts and indices exactly, or refuses" begin
+    cam = IdealCamera(1:64, 1:64, 0.1)
+    big = 2^53 + 1                    # the first whole number a double cannot hold
+    em(; kw...) = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; kw...)
+    mktempdir() do dir
+        # 2^53 itself is a double: written and read back exactly
+        smld = SMLMCore.BasicSMLD([em(frame=2^53, track_id=2^53)], cam, 2^53, 1)
+        save_smite(smld, dir, "edge.mat")
+        back = load_smite_2d(SmiteSMD(dir, "edge.mat"))
+        @test back.n_frames == 2^53 && back.emitters[1].frame == 2^53 && back.emitters[1].track_id == 2^53
+        # One above is an ArgumentError naming the field and the emitter; no file is written
+        for (name, smld, msg) in (
+                ("nf.mat", SMLMCore.BasicSMLD([em()], cam, big, 1), "n_frames $big"),
+                ("nd.mat", SMLMCore.BasicSMLD([em()], cam, 1, big), "n_datasets $big"),
+                ("fr.mat", SMLMCore.BasicSMLD([em(), em(frame=big)], cam, 1, 1), "frame of emitter 2 $big"),
+                ("ds.mat", SMLMCore.BasicSMLD([em(dataset=big)], cam, 1, 1), "dataset of emitter 1 $big"),
+                ("tr.mat", SMLMCore.BasicSMLD([em(), em(), em(track_id=-big)], cam, 1, 1), "track_id of emitter 3 -$big"))
+            err = try save_smite(smld, dir, name); nothing catch ex; ex end
+            @test err isa ArgumentError
+            err isa ArgumentError && @test occursin(msg, err.msg) && occursin("MATLAB double", err.msg)
+            @test !isfile(joinpath(dir, name))
+        end
+        # An existing file is left as it was
+        save_smite(SMLMCore.BasicSMLD([em()], cam, 1, 1), dir, "keep.mat")
+        before = read(joinpath(dir, "keep.mat"))
+        @test_throws ArgumentError save_smite(SMLMCore.BasicSMLD([em()], cam, big, 1), dir, "keep.mat")
+        @test read(joinpath(dir, "keep.mat")) == before
+    end
+end

@@ -12,6 +12,9 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   size or count below 1 (which loaded a camera with no pixels, or no frames) or a pixel size
   that is not finite is an `ArgumentError` naming the field. A `FrameNum`, `DatasetNum` or
   `ConnectID` value too large for an `Int` is an `ArgumentError`, not an `InexactError`.
+- `save_smite` wrote `n_frames`, `n_datasets` and each emitter's `frame`, `dataset` and
+  `track_id` as doubles without checking them, so a value above 2^53 was saved rounded. Such a
+  value is now an `ArgumentError` naming it, and nothing is written.
 
 ## 0.1.0 (2026-11-16)
 
