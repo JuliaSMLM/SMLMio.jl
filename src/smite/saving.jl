@@ -130,7 +130,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s["PixelSize"] = pxw
     s["NDims"] = zcols === nothing ? 2.0 : 3.0
 
-    md = smld.metadata
+    md = _smite_metadata(smld.metadata)
 
     # Optional fields the file left empty, which the loader filled with defaults and that still hold
     # only the default, go back empty (SMITE treats an empty ConnectID differently from zeros). A
@@ -173,41 +173,29 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         end
     end
 
-    # Z and Z_SE in the metadata, matched to the saved emitters by row: for data loaded from SMITE,
-    # the listed per-localization fields, by row (load_smite_2d keeps them from a 3D file); for
-    # other data, by _metadata_rows (each emitter's id when every id names a row, as SMLMData 0.7.1
-    # set it, or in order when no emitter has an id and the counts match). Such a field with as
-    # many values as emitters that cannot be matched is dropped with a warning, since a load would
-    # take it for one value per localization. On 2D emitters they are written through the same
-    # writer as the emitters' z, so a save and a later save of its load agree; a value that is
-    # not a number drops them with a warning. The file says NDims 3 when both are written
+    # Z and Z_SE in the metadata with one value per saved emitter: for data loaded from SMITE, the
+    # listed per-localization fields, by row (load_smite_2d keeps them from a 3D file); for other
+    # data (built by hand, or loaded by SMLMData 0.7.1, which kept a 3D file's Z that way), fields
+    # with as many values as emitters, in the order given, as 0.1.0 wrote them. Such data carry no
+    # record of which row each value belongs to (ids are not that: a join, a filter or frame
+    # connection keeps or reuses them), so that order cannot be checked; the warning below says
+    # so. On 2D emitters they are written through the same writer as the emitters' z, so a save
+    # and a later save of its load agree; a value that is not a number drops them with a warning. The file says NDims 3 when both are written
     # and it has localizations, the loaded file's Z had values (SMITE writes NDims 2 for its 3D
     # fits too) or the metadata's NDims is 3. When the emitters' own Z was not saved (lostz),
     # metadata Z and Z_SE are not saved at all.
     loaded = haskey(md, "smite_per_localization_fields")
-    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "metadata row", Int[], n > 0
-    unmatched = String[]
+    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "metadata row", collect(1:n), n > 0
     if zcols === nothing && !lostz
         if loaded
             zkeys = filter(k -> k in towrite, ["Z", "Z_SE"])
             zsrc = [_smite_vec(md[k])[rows] for k in zkeys]
             zunit, zids, zhad = "file row", rows, any(k -> _smite_length(md[k]) > 0, zkeys)
         else
-            for k in ("Z", "Z_SE")
-                m = haskey(md, k) ? _smite_length(md[k]) : -1
-                m >= 0 || continue
-                r = _metadata_rows(smld.emitters, m)
-                if r === nothing
-                    m == n && n > 0 && push!(unmatched, k)
-                else
-                    push!(zkeys, k); push!(zsrc, _smite_vec(md[k])[r]); zids = r
-                end
-            end
+            zkeys = filter(k -> haskey(md, k) && _smite_length(md[k]) == n, ["Z", "Z_SE"])
+            zsrc = [_smite_vec(md[k]) for k in zkeys]
         end
     end
-    isempty(unmatched) || @warn("save_smite: $(join(unmatched, ", ")) not saved: their values cannot be " *
-        "matched to these emitters (the emitters' ids are not rows of them), and with as many values " *
-        "as emitters a load would take them for each emitter's")
     mdz = Dict{String,Any}()
     if !isempty(zkeys)
         conv = _z_columns(zkeys, zsrc, zunit, zids)
@@ -218,6 +206,15 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         end
     end
     ndims3_from_md = length(mdz) == 2 && (n > 0 || zhad || _is_ndims3(get(md, "NDims", nothing)))
+    # Data not loaded by SMLMio: SMITE's per-localization fields written with one value per
+    # emitter are in the order given, which save_smite cannot check (Z and Z_SE when written)
+    unchecked = loaded || n == 0 ? String[] :
+        sort!([k for (k, v) in md if k in _SMITE_STACKABLE && _smite_length(v) == n &&
+               (!(k in ("Z", "Z_SE")) || haskey(mdz, k))])
+    isempty(unchecked) || @warn("save_smite: $(join(unchecked, ", ")) written in the order given, one " *
+        "value per emitter: these data were not loaded by SMLMio, so nothing records which " *
+        "localization each value belongs to (a sort, filter, join or frame connection since the " *
+        "values were made would misplace them)")
 
     # Add any additional fields from metadata, except the loaders' own entries. For data loaded
     # from SMITE, a field SMITE stacks per localization that is not listed as one value per file
@@ -227,7 +224,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     ambiguous = String[]
     for (key, value) in md
         (key in _SMITE_LOADER_KEYS || haskey(s, key)) && continue
-        if key in ("Z", "Z_SE") && (lostz || key in zkeys || key in unmatched)
+        if key in ("Z", "Z_SE") && (lostz || key in zkeys)
             haskey(mdz, key) && (s[key] = mdz[key])
             continue
         end
@@ -439,19 +436,22 @@ end
 # its writer refuses; such an element is written as an empty double array, as SMITE holds an empty
 # field. Cells (arrays holding arrays) are searched, and keep their shape and other elements.
 _mat_writable(v::AbstractArray{Union{}}) = zeros(size(v))
-_mat_writable(v::AbstractArray) =
-    eltype(v) <: Number || !any(x -> x isa AbstractArray, v) ? v : map(_mat_writable, v)
+_mat_writable(v::AbstractArray) = eltype(v) <: Number ||
+    !any(x -> x isa Union{AbstractArray,AbstractDict,Tuple}, v) ? v : map(_mat_writable, v)
+# A tuple (metadata built in Julia) is written as the array it holds; MAT 0.10 refuses tuples.
+_mat_writable(v::Tuple) = _mat_writable(collect(v))
+# A Dict (a MATLAB struct) is searched too.
+_mat_writable(v::AbstractDict) = Dict{keytype(v),Any}(k => _mat_writable(x) for (k, x) in v)
 _mat_writable(v) = v
 
-# The rows of a metadata field of `m` values that belong to `emitters`, for data not loaded by
-# SMLMio: each emitter's id when every id is a distinct row of the field (SMLMData 0.7.1 set id to
-# the file row); in order when no emitter has an id (all 0, the default, or no id property) and
-# there are as many values as emitters; otherwise nothing.
-function _metadata_rows(emitters, m)
-    ids = [hasproperty(e, :id) ? e.id : 0 for e in emitters]
-    !isempty(ids) && all(i -> i isa Integer && 1 <= i <= m, ids) && allunique(ids) && return Int.(ids)
-    all(i -> i isa Integer && iszero(i), ids) && length(ids) == m && return collect(1:m)
-    return nothing
+# The metadata as save_smite reads it, a copy: every value made writable (_mat_writable), and empty
+# text in SMITE's own fields made an empty array, as the loaders do (_smite_empty_text!).
+function _smite_metadata(md)
+    out = copy(md)
+    for (k, v) in md
+        out[k] = _mat_writable(v)
+    end
+    return _smite_empty_text!(out)
 end
 
 # A count or index as a MATLAB double, by the loaders' rule (_fits_int, _SMITE_COUNT_MIN) so that

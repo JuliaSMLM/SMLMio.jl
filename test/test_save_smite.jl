@@ -764,8 +764,10 @@ end
             save_smite(back, dir, "again-" * name)
             once, matread(joinpath(dir, "again-" * name))["SMD"]
         end
-        for (a, b) in (twice("mdz.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2])),
-                       twice("mdz3.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2], "NDims" => 3.0)))
+        order = (:warn, r"Z, Z_SE written in the order given")
+        for (a, b) in (@test_logs(order, twice("mdz.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2]))),
+                       @test_logs(order, twice("mdz3.mat", Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2],
+                                                                           "NDims" => 3.0))))
             @test a["NDims"] == 3 && b["NDims"] == 3
             @test vec(a["Z"]) == vec(b["Z"]) == [0.25, 0.5]
         end
@@ -775,27 +777,23 @@ end
         @test !haskey(a, "Z") && !haskey(b, "Z") && a["NDims"] == b["NDims"] == 2
         @test_throws r"Z of metadata row 1 is 9007199254740993" save_smite(
             sm([e2, e2]; md=Dict{String,Any}("Z" => Int64[2^53 + 1, 1], "Z_SE" => [0.1, 0.2])), dir, "mdzbig.mat")
-        # Data whose emitters' ids are rows of the metadata's Z (SMLMData 0.7.1 set id to the file
-        # row and kept a 3D file's Z in file order): each emitter gets its own row's z, after a
-        # reordering or a localization dropped by the complex screening alike
+        # Data not loaded by SMLMio carry no record of which localization each metadata value
+        # belongs to (ids are not that: a join, a filter or frame connection keeps or reuses them),
+        # so values with one per emitter are written in the order given, as 0.1.0 wrote them, with
+        # a warning naming every such field; with another count they are ordinary metadata
         f(fr, id) = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0; frame=fr, id=id)
-        zmd() = Dict{String,Any}("Z" => [0.25, 0.5, 0.75], "Z_SE" => [0.1, 0.2, 0.3])
-        for (es, z, σz) in (([f(3, 3), f(1, 1)], [0.75, 0.25], [0.3, 0.1]),
-                            ([f(1, 1), f(3, 3)], [0.25, 0.75], [0.1, 0.3]),
-                            ([f(2, 2), f(1, 1), f(3, 3)], [0.5, 0.25, 0.75], [0.2, 0.1, 0.3]))
-            save_smite(sm(es; md=zmd()), dir, "byid.mat")
-            back = load_smite_3d(SmiteSMD(dir, "byid.mat"))
-            @test [e.frame for e in back.emitters] == [e.frame for e in es]
-            @test [e.z for e in back.emitters] == z && [e.σ_z for e in back.emitters] ≈ σz
-        end
-        # Ids that are not rows of a Z with as many values as emitters: not taken for coordinates,
-        # dropped with a warning (a load would take them for each emitter's)
-        @test_logs (:warn, r"Z, Z_SE not saved: their values cannot be matched") save_smite(
-            sm([f(1, 5), f(2, 6)]; md=Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2])), dir, "noid.mat")
-        smd = matread(joinpath(dir, "noid.mat"))["SMD"]
-        @test !haskey(smd, "Z") && smd["NDims"] == 2
+        given = Dict{String,Any}("Z" => [0.25, 0.5], "Z_SE" => [0.1, 0.2], "PValue" => [0.9, 0.8])
+        @test_logs (:warn, r"PValue, Z, Z_SE written in the order given") save_smite(
+            sm([f(10, 2), f(20, 1)]; md=given), dir, "given.mat")
+        back = load_smite_3d(SmiteSMD(dir, "given.mat"))
+        @test [(e.frame, e.z) for e in back.emitters] == [(10, 0.25), (20, 0.5)]
+        @test vec(matread(joinpath(dir, "given.mat"))["SMD"]["PValue"]) == [0.9, 0.8]
+        @test_logs save_smite(sm([f(1, 1), f(3, 3)]; md=Dict{String,Any}("Z" => [0.25, 0.5, 0.75])), dir, "rows3.mat")
+        smd = matread(joinpath(dir, "rows3.mat"))["SMD"]
+        @test smd["NDims"] == 2 && vec(smd["Z"]) == [0.25, 0.5, 0.75]
         # A tuple in the metadata is the array it holds
-        save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => (0.25, 0.5), "Z_SE" => [0.1, 0.2])), dir, "tup.mat")
+        @test_logs order save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => (0.25, 0.5), "Z_SE" => [0.1, 0.2])),
+                                    dir, "tup.mat")
         smd = matread(joinpath(dir, "tup.mat"))["SMD"]
         @test smd["NDims"] == 3 && vec(smd["Z"]) == [0.25, 0.5]
         @test_throws r"Z of metadata row 1 is 9007199254740993" save_smite(

@@ -165,6 +165,9 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             @test smld.emitters[1] isa Emitter2DFit
             @test haskey(smld.metadata, "Z")
             @test_logs load_smite_2d(write_smd(dir, "two.mat", smite_smd(3)))   # 2D: no warning
+            # Z without Z_SE: load_smite_3d could not load it, so no advice to
+            s3 = smite_smd_3d(3); s3["Z_SE"] = zeros(0, 0)
+            @test_logs load_smite_2d(write_smd(dir, "zonly.mat", s3))
             # Saved, the Z kept in metadata goes back with its rows, and the file says 3D.
             save_smite(smld, dir, "three-saved.mat")
             saved = matread(joinpath(dir, "three-saved.mat"))["SMD"]
@@ -621,11 +624,12 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             three = SMLMCore.@filter(a, frame <= 3)
             save_smite(three, dir, "pd3.mat")
             @test vec(matread(joinpath(dir, "pd3.mat"))["SMD"]["PValue"]) == Float32[0.9, 0.8]
-            # Metadata a user set on data not loaded from SMITE is written as given.
+            # Metadata a user set on data not loaded from SMITE is written as given; a SMITE
+            # per-localization field with one value per emitter warns that its order is unchecked.
             es = [Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5),
                   Emitter2DFit{Float64}(2.0, 2.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5)]
             mine = BasicSMLD(es, IdealCamera(1:64, 1:64, 0.1), 1, 1, Dict{String,Any}("PValue" => [0.5, 0.6]))
-            save_smite(mine, dir, "mine.mat")
+            @test_logs (:warn, r"PValue written in the order given") save_smite(mine, dir, "mine.mat")
             @test vec(matread(joinpath(dir, "mine.mat"))["SMD"]["PValue"]) == [0.5, 0.6]
         end
     end
@@ -673,7 +677,10 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             a.metadata["ConnectID"] = ""
             save_smite(a, dir, "b-text.mat")
             @test isempty(matread(joinpath(dir, "b-text.mat"))["SMD"]["ConnectID"])
-            @test SMLMio._smite_scalar("f", Dict{String,Any}("PixelSize" => ""), "PixelSize") === nothing
+            md = SMLMio._smite_metadata(Dict{String,Any}("PixelSize" => "", "Comment" => "", "Z" => (1.0, 2.0),
+                                                         "Extra" => Dict{String,Any}("t" => (3, 4))))
+            @test md["PixelSize"] == zeros(0, 0) && md["Comment"] == "" && md["Z"] == [1.0, 2.0]
+            @test md["Extra"]["t"] == [3, 4]
             @test SMLMio._smite_scalar("f", Dict{String,Any}("XSize" => zeros(0, 0)), "XSize") === nothing
             fields = Dict{String,Any}("PValue" => "", "Z" => "", "X" => "", "PixelSize" => "",
                                       "NFrames" => "", "Comment" => "", "Label" => "x")

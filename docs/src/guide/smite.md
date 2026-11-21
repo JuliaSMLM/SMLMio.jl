@@ -89,7 +89,7 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   it back, and none is an error: when it is one whole number of at least 0 that fits an `Int`,
   `load_smite_3d` also appends it to `data_size`; any other `ZSize` (several values, text, -1)
   is only kept in the metadata.
-  `load_smite_2d` on a file whose `Z` holds one value per localization warns that it leaves `Z`
+  `load_smite_2d` on a file whose `Z` and `Z_SE` hold one value per localization warns that it leaves `Z`
   out (kept in the metadata); SMITE writes `NDims` 2 for its own 3D fits, so `NDims` does not
   say whether a file is 3D.
 - **Rows or columns.** An SMD built by hand in MATLAB with row vectors loads like SMITE's
@@ -184,12 +184,14 @@ again once the cause is fixed. It contains:
   localizations, the loaded file's `Z` had values (SMITE writes `NDims` 2 for its own 3D fits)
   or the metadata's `NDims` is 3. `Z` and `Z_SE` in the metadata of data not loaded by SMLMio
   (built by hand, or loaded by SMLMData 0.7.1, which kept a 3D file's `Z` that way) are written
-  the same way when they can be matched to the emitters: by each emitter's `id` when every `id`
-  is a row of the field (SMLMData 0.7.1 set `id` to the file row, so a reordering or a dropped
-  localization keeps each `z` with its emitter), or in order when no emitter has an `id` and
-  there are as many values as emitters. So a save and a save of its load agree. Such a field
-  with as many values as emitters that cannot be matched is dropped with a warning; with another
-  count it is ordinary metadata. An emitter is taken to be the row its `id` names
+  the same way when they hold one value per emitter, in the order given, as 0.1.0 wrote them,
+  so a save and a save of its load agree; with another count they are ordinary metadata. Such
+  data carry no record of which localization each value belongs to (an `id` is not that: a
+  join, a filter or frame connection keeps or reuses ids), so `save_smite` cannot check that
+  order: it warns, naming every SMITE per-localization field (`Z`, `PValue`, ...) it writes in
+  the order given. Sorting, filtering or joining such data before saving misplaces those
+  values; load the file with SMLMio first, whose row record lets `save_smite` check them. An
+  emitter of data SMLMio loaded is taken to be the row its `id` names
   when its frame and photons equal that row's. The fields are written only when every emitter is
   such a row; for combined localizations (frame connection's combined output), changed frames or
   photons, or emitters joined from another file, they are dropped with a warning. Emitters from
@@ -198,8 +200,8 @@ again once the cause is fixed. It contains:
   longer has one value per file row is dropped with a warning too. These fields are written by
   row because `metadata["smite_per_localization_fields"]` lists them; deleting that list makes
   `save_smite` write them as ordinary metadata, and after a filter they then no longer match the
-  localizations (except `Z` and `Z_SE`, which are then matched by the emitters' ids, as for data
-  not loaded by SMLMio, above).
+  localizations; with one value per emitter they are then written in the order given, with the
+  warning above.
 - a field SMITE stacks per localization that is not listed in
   `metadata["smite_per_localization_fields"]` (the file held it with other than one value per
   row, often one per dataset: `PValue`, `ThreshFlag`, `XBoxCorner`, ... in some older files; or

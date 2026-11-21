@@ -13,12 +13,10 @@ end
 
 # MAT reads a 1x1 field as a scalar and an empty field as a 0x0 matrix.
 _smite_length(v::AbstractArray) = length(v)
-_smite_length(v::Tuple) = length(v)      # metadata built in Julia may hold a tuple
 _smite_length(::Number) = 1
 _smite_length(_) = -1
 _smite_vec(v::AbstractArray) = vec(v)
 _smite_vec(v::Number) = [v]
-_smite_vec(v::Tuple) = collect(v)
 
 # A per-localization field as a vector of numbers, or nothing when it is not numeric. MAT reads a
 # MATLAB cell of numbers (single and double values together, say) as an array of Any; its values
@@ -32,8 +30,9 @@ function _smite_numeric(v)
     return Number[x for x in vec(v)]
 end
 
-# A field left empty: a 0 x 0 matrix, an empty cell, or empty text.
-_smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
+# A field left empty: a 0 x 0 matrix or an empty cell (empty text in SMITE's own fields is made one
+# by _smite_empty_text!, as a file is read and before a save).
+_smite_empty(v) = v isa AbstractArray && isempty(v)
 
 # SMITE's scalar fields the loaders read.
 const _SMITE_SCALARS = ("PixelSize", "XSize", "YSize", "NFrames", "NDatasets", "NDims", "ZSize")
@@ -152,8 +151,9 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
             c !== nothing && !isempty(c) && push!(mismatched, key)
         end
     end
-    # SMITE writes NDims 2 for its own 3D fits too, so a Z with one value per localization says 3D
-    !three_d && n > 0 && _smite_length(get(s, "Z", nothing)) == n &&
+    # SMITE writes NDims 2 for its own 3D fits too, so Z and Z_SE with one value per localization
+    # say 3D (and that load_smite_3d can load the file)
+    !three_d && n > 0 && _smite_length(get(s, "Z", nothing)) == n && _smite_length(get(s, "Z_SE", nothing)) == n &&
         @warn("$where has Z for each localization (a 3D fit); load_smite_2d leaves out Z (kept in " *
               "metadata), load_smite_3d loads it")
     isempty(mismatched) || @warn("$where: $(join(mismatched, ", ")) do not hold one value per " *
