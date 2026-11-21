@@ -45,13 +45,14 @@ function _smite_scalar(where, s, key)
                                 "$where: $key is not a number"))
 end
 
-# The pixel size keeps its floating-point type, so a MATLAB single PixelSize gives a Float32
-# camera; another real number becomes a Float64. It must be real, finite and positive.
+# The pixel size as MATLAB's single or double: a Float32 (a MATLAB single PixelSize) stays
+# Float32 and gives a Float32 camera, as in SMLMData 0.7.1; every other real number becomes a
+# Float64. It must be real, finite and positive.
 function _smite_pixel_size(where, what, v)
     v isa Number || throw(ArgumentError("$where: $what is not a number"))
     iszero(imag(v)) || throw(ArgumentError("$where: $what $v is not a real number"))
     r = real(v)
-    px = r isa AbstractFloat ? r : Float64(r)
+    px = r isa Float32 ? r : Float64(r)
     isfinite(px) || throw(ArgumentError("$where: $what $px is not finite"))
     px > 0 || throw(ArgumentError("$where: pixel size $px is not positive"))
     return px
@@ -149,6 +150,12 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     nframes = _smite_count(where, "NFrames", nframes, _SMITE_COUNT_MIN["NFrames"])
     ndatasets = _smite_count(where, "NDatasets", ndatasets, _SMITE_COUNT_MIN["NDatasets"])
     camera = IdealCamera(1:xsize, 1:ysize, px)
+    # In Float32, a large image or pixel size can give edges that are not finite or that round
+    # onto each other
+    increasing(e) = all(isfinite, e) && all(k -> e[k+1] > e[k], 1:length(e)-1)
+    increasing(camera.pixel_edges_x) && increasing(camera.pixel_edges_y) || throw(ArgumentError(
+        "$where: $xsize × $ysize pixels of $px µm do not give finite, increasing pixel edges " *
+        "in $(typeof(px))"))
 
     # Screen complex values in the per-localization columns read from the file
     fields_to_check = filter(k -> !(k in defaulted),
@@ -253,8 +260,8 @@ Load a 2D SMITE SMD into a [`SmiteSMLD`](@ref) of `Emitter2DFit{Float64}`.
 
 SMITE stores `X`, `Y`, `X_SE` and `Y_SE` in pixels, with (1, 1) the center of the top-left pixel.
 They load in µm from the camera's corner: `x = (X - 0.5) * PixelSize`,
-`σ_x = X_SE * PixelSize`. The camera is an `IdealCamera` of `XSize` by `YSize` pixels, in the
-pixel size's floating-point type (`IdealCamera{Float32}` for a MATLAB single `PixelSize`). How
+`σ_x = X_SE * PixelSize`. The camera is an `IdealCamera` of `XSize` by `YSize` pixels:
+`IdealCamera{Float32}` for a MATLAB single `PixelSize`, otherwise `IdealCamera{Float64}`. How
 the loaders treat empty and per-dataset fields, and what is kept in the metadata, is on the
 [SMITE files](@ref) page.
 

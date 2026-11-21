@@ -7,7 +7,11 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 - Scalar fields were converted to `Float64` before they were checked. A complex `NFrames`,
   `NDatasets`, `XSize`, `YSize` or `PixelSize` loaded as its real part, counts above 2^53 were
   rounded, and a MATLAB single `PixelSize` gave an `IdealCamera{Float64}` (SMLMData 0.7.1 gave
-  an `IdealCamera{Float32}`). Each is now checked as stored, and counts load exactly. `XSize`
+  an `IdealCamera{Float32}`). Each is now checked as stored, and counts load exactly. A single
+  `PixelSize` gives an `IdealCamera{Float32}` again (any other pixel size a `Float64` camera),
+  and `save_smite` writes a `Float32` camera's `PixelSize` as single, so the file loads back
+  with the same camera; a `Float32` pixel size whose camera edges overflow or round onto each
+  other, or a pixel size that is not finite, is an `ArgumentError`. `XSize`
   and `YSize` must be whole numbers of at least 1 (0 or below loaded a camera with no pixels),
   `NFrames` and `NDatasets` whole numbers of at least 0; a value with a non-zero imaginary part,
   text or several values is an `ArgumentError` naming the field, and a `pixel_size` passed to

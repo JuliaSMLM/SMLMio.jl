@@ -57,8 +57,8 @@ SMLD of the fit emitters of a SMITE SMD; the SMD's other fields are kept in `met
 # Fields
 - `emitters::Vector{E}`: the localizations; positions and uncertainties in µm.
 - `camera::AbstractCamera`: an `IdealCamera` of `XSize` × `YSize` pixels of `PixelSize` µm, built
-  from the file (an sCMOS calibration is not in the file), in the pixel size's floating-point
-  type.
+  from the file (an sCMOS calibration is not in the file); `Float32` for a MATLAB single
+  `PixelSize`, otherwise `Float64`.
 - `n_frames::Int`: frames per dataset (SMITE's `NFrames`); `frame` runs from 1 to `n_frames` in
   each dataset.
 - `n_datasets::Int`: number of datasets (SMITE's `NDatasets`).

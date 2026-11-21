@@ -59,10 +59,12 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
 - **No pixel size.** When the file has no `PixelSize`, or an empty one, pass it:
   `load_smite_2d(smd; pixel_size=0.0978)`. Without it the loader throws; it never assumes one.
   When the file has a pixel size, a different `pixel_size` is an error.
-- **Pixel size type.** The camera keeps the pixel size's floating-point type: a MATLAB single
-  `PixelSize` (or a `Float32` `pixel_size`) gives an `IdealCamera{Float32}`, a double an
-  `IdealCamera{Float64}`; another real number becomes a `Float64`. The emitters are
-  `Float64` either way. A pixel size that is complex, not finite or not positive is an error.
+- **Pixel size type.** A MATLAB single `PixelSize` gives an `IdealCamera{Float32}`, as in
+  SMLMData 0.7.1; any other pixel size becomes a `Float64` and gives an `IdealCamera{Float64}`.
+  A `pixel_size` passed to the loader sets the type only when the file has no `PixelSize`
+  (a `Float32` one gives a `Float32` camera). The emitters are `Float64` either way. A pixel
+  size that is complex (with a non-zero imaginary part), not finite or not positive is an
+  error, and so is a `Float32` one whose camera edges overflow or round onto each other.
 - **Sizes and counts.** `XSize` and `YSize` must each be one whole number of at least 1, and
   `NFrames` and `NDatasets` one whole number of at least 0, in `Int`'s range and compared as
   stored, so a count above 2^53 is not rounded. A complex value with a non-zero imaginary part,
@@ -136,7 +138,8 @@ again once the cause is fixed. It contains:
   double, as above (MAT cannot write other types, such as `Float16`). Other non-empty 3D or
   mixed 2D/3D data save without `Z`, with a warning: an SMD has one `Z` column for all
   localizations, so save 2D and 3D data separately to keep it.
-- `XSize`, `YSize` and `PixelSize` from the camera, `NFrames`, `NDatasets` and `NDims`; counts
+- `XSize`, `YSize` and `PixelSize` from the camera (`PixelSize` as single for a `Float32`
+  camera, so the file loads back with the same camera), `NFrames`, `NDatasets` and `NDims`; counts
   and indices as doubles, as most SMITE results files hold them. They follow the loaders' rule,
   so every file `save_smite` writes loads: `n_frames` and `n_datasets` must be whole numbers of
   at least 0, and each emitter's `frame`, `dataset` and `track_id` whole numbers, each in

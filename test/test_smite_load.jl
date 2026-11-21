@@ -599,6 +599,17 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
                 @test [e.y for e in b.emitters] ≈ [2.0, 25.5] rtol = 1e-6
                 @test length(b.camera.pixel_edges_x) == length(cam.pixel_edges_x)
             end
+            # A Float32 camera (from a MATLAB single PixelSize) writes PixelSize as single and loads
+            # back as the same Float32 camera, so the saved copy combines with the original
+            orig = load_smite_2d(write_smd(dir, "px32src.mat", smite_smd(3; pixel_size=0.1f0)))
+            @test orig.camera isa IdealCamera{Float32}
+            save_smite(orig, dir, "f32cam.mat")
+            @test matread(joinpath(dir, "f32cam.mat"))["SMD"]["PixelSize"] === 0.1f0
+            back = load_smite_2d(SmiteSMD(dir, "f32cam.mat"))
+            @test back.camera isa IdealCamera{Float32}
+            @test back.camera.pixel_edges_x == orig.camera.pixel_edges_x
+            @test length(SMLMCore.cat_smld(orig, back).emitters) == 6
+            @test length(SMLMCore.merge_smld(orig, back).emitters) == 6
             # Float32 emitters keep Float32 position columns (MATLAB single), as before.
             saved = matread(joinpath(dir, "f32.mat"))["SMD"]
             @test eltype(saved["X"]) == Float32 && eltype(saved["X_SE"]) == Float32
@@ -686,7 +697,15 @@ end
         nopx = smite_smd(3); delete!(nopx, "PixelSize")
         @test ld("pxkw32.mat", nopx; pixel_size=0.1f0).camera isa IdealCamera{Float32}
         @test ld("pxkw64.mat", nopx; pixel_size=0.1).camera isa IdealCamera{Float64}
-        # Another real number becomes a Float64; a complex one with no imaginary part is its real part
+        # Every other real number becomes a Float64 (MATLAB has single and double only), so the
+        # positions are computed in Float64 whatever the pixel size's type; a complex value with
+        # no imaginary part is its real part
+        for kw in (big"0.125", Float16(0.125), 1 // 8)
+            smld = ld("pxkw_$(typeof(kw)).mat", nopx; pixel_size=kw)
+            @test smld.camera isa IdealCamera{Float64}
+            @test smld.metadata["pixel_size"] === 0.125
+            @test [e.x for e in smld.emitters] == (Float64.(vec(nopx["X"])) .- 0.5) .* 0.125
+        end
         @test ld("pxint.mat", smite_smd(3; pixel_size=1)).metadata["pixel_size"] === 1.0
         @test ld("pxc0.mat", smite_smd(3; pixel_size=ComplexF64(0.1, 0))).metadata["pixel_size"] === 0.1
         s = smite_smd(3); s["NFrames"] = ComplexF64(100, 0)
@@ -736,6 +755,13 @@ end
         # The pixel_size keyword is checked the same way
         @test_throws r"pixel_size is not a number" ld("pxkwtext.mat", nopx; pixel_size="0.1")
         @test_throws r"pixel_size Inf is not finite" ld("pxkwinf.mat", nopx; pixel_size=Inf)
+        # A Float32 pixel size whose camera edges overflow, or round onto each other, is an error
+        s = smite_smd(3; pixel_size=floatmax(Float32)); s["XSize"] = 2.0
+        @test_throws r"do not give finite, increasing pixel edges in Float32" ld("pxhuge.mat", s)
+        s = smite_smd(3; pixel_size=1.0f0); s["XSize"] = Float64(2^24 + 1); s["YSize"] = 1.0
+        @test_throws r"16777217 × 1 pixels of 1.0 µm do not give finite, increasing" ld("pxwide.mat", s)
+        s["PixelSize"] = 1.0                       # in Float64 the same image is fine
+        @test length(ld("pxwide64.mat", s).camera.pixel_edges_x) == 2^24 + 2
         # ZSize, which SMITE does not write: in 3D one number is appended to data_size, a whole
         # number of at least 0; several values or text are kept in the metadata only, as in
         # 0.1.0. Every ZSize stays in the metadata.

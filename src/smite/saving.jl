@@ -112,7 +112,9 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s["NDatasets"] = _mat_count("n_datasets", smld.n_datasets, _SMITE_COUNT_MIN["NDatasets"])
     s["XSize"] = Float64(length(ex) - 1)
     s["YSize"] = Float64(length(ey) - 1)
-    s["PixelSize"] = Float64(px)
+    # A Float32 camera's pixel size is written as single, so the file loads back with a Float32
+    # camera, as the loaders build one from a single PixelSize
+    s["PixelSize"] = eltype(ex) === Float32 ? px : Float64(px)
     s["NDims"] = zcols === nothing ? 2.0 : 3.0
 
     md = smld.metadata
