@@ -30,7 +30,8 @@ function _smite_numeric(v)
     return Number[x for x in vec(v)]
 end
 
-# A field SMITE left empty: a 0 x 0 matrix (or an empty cell or text).
+# A field SMITE left empty: a 0 x 0 matrix, an empty cell, or empty text (MAT 0.10 reads an empty
+# MATLAB field as "", later versions as an empty array).
 _smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
 
 # A scalar field (XSize, PixelSize, ...) as the file stores it, or nothing when it is absent or
@@ -39,8 +40,9 @@ _smite_empty(v) = (v isa AbstractArray || v isa AbstractString) && isempty(v)
 function _smite_scalar(where, s, key)
     v = get(s, key, nothing)
     v === nothing && return nothing
+    # Empty: a 0 x 0 matrix, or the empty text MAT 0.10 reads for an empty MATLAB field
+    _smite_empty(v) && return nothing
     k = _smite_length(v)
-    k == 0 && return nothing
     k == 1 && first(v) isa Number && return first(v)
     throw(ArgumentError(k > 1 ? "$where: $key holds $k values; SMLMio loads files with one $key " *
                                 "(SMITE's catSMD stores a list of a field that differs between the " *

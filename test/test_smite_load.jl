@@ -628,6 +628,13 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             save_smite(a, dir, "b.mat")
             saved = matread(joinpath(dir, "b.mat"))["SMD"]
             @test isempty(saved["ConnectID"])
+            # MAT 0.10 reads an empty MATLAB field as empty text: it is written back empty too,
+            # and an empty-text scalar is an absent one (PixelSize then comes from pixel_size)
+            a.metadata["ConnectID"] = ""
+            save_smite(a, dir, "b-text.mat")
+            @test isempty(matread(joinpath(dir, "b-text.mat"))["SMD"]["ConnectID"])
+            @test SMLMio._smite_scalar("f", Dict{String,Any}("PixelSize" => ""), "PixelSize") === nothing
+            @test SMLMio._smite_scalar("f", Dict{String,Any}("XSize" => zeros(0, 0)), "XSize") === nothing
             # A per-dataset value is not one per localization: the saved column is the NaN that
             # loaded, never the per-dataset numbers, which a later load could take for
             # per-localization uncertainties.

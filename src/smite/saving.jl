@@ -136,7 +136,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # raw values are not one per localization, and a later load could take them for that.
     defaulted = get(md, "smite_defaulted_fields", String[])
     for (key, default) in _SMITE_OPTIONAL
-        key in defaulted && haskey(md, key) && _smite_length(md[key]) == 0 &&
+        key in defaulted && haskey(md, key) && _smite_empty(md[key]) &&
             all(v -> isequal(v, default), s[key]) && (s[key] = md[key])
     end
 
