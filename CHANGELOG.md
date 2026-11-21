@@ -2,6 +2,17 @@
 
 ## 0.1.1 (unreleased)
 
+Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
+
+- Scalar fields were converted to `Float64` before they were checked. A complex `NFrames`,
+  `NDatasets`, `XSize`, `YSize` or `PixelSize` loaded as its real part, counts above 2^53 were
+  rounded, and a MATLAB single `PixelSize` gave an `IdealCamera{Float64}` (SMLMData 0.7.1 gave
+  an `IdealCamera{Float32}`). Each is now checked as stored: the camera keeps the pixel size's
+  floating-point type, counts load exactly, and a complex value, text, several values, an image
+  size or count below 1 (which loaded a camera with no pixels, or no frames) or a pixel size
+  that is not finite is an `ArgumentError` naming the field. A `FrameNum`, `DatasetNum` or
+  `ConnectID` value too large for an `Int` is an `ArgumentError`, not an `InexactError`.
+
 ## 0.1.0 (2026-11-16)
 
 - Created from SMLMData 0.7.1's SMITE I/O: `SmiteSMD`, `SmiteSMLD`, `load_smite_2d`,

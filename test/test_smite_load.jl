@@ -635,3 +635,68 @@ end
         @test [e.track_id for e in smld.emitters] == [0, 2]
     end
 end
+
+@testset "scalar fields are checked as stored, before conversion" begin
+    mktempdir() do dir
+        ld(name, s; kw...) = load_smite_2d(write_smd(dir, name, s); kw...)
+        # The camera keeps the pixel size's floating-point type, as SMLMData 0.7.1 did
+        s = smite_smd(3; pixel_size=0.125f0)
+        smld = ld("px32type.mat", s)
+        @test smld.camera isa IdealCamera{Float32}
+        @test smld.metadata["pixel_size"] === 0.125f0
+        @test [e.x for e in smld.emitters] == (Float64.(vec(s["X"])) .- 0.5) .* 0.125
+        @test smld.emitters[1] isa Emitter2DFit{Float64}
+        @test ld("px64type.mat", smite_smd(3)).camera isa IdealCamera{Float64}
+        nopx = smite_smd(3); delete!(nopx, "PixelSize")
+        @test ld("pxkw32.mat", nopx; pixel_size=0.1f0).camera isa IdealCamera{Float32}
+        @test ld("pxkw64.mat", nopx; pixel_size=0.1).camera isa IdealCamera{Float64}
+        # Another real number becomes a Float64; a complex one with no imaginary part is its real part
+        @test ld("pxint.mat", smite_smd(3; pixel_size=1)).metadata["pixel_size"] === 1.0
+        @test ld("pxc0.mat", smite_smd(3; pixel_size=ComplexF64(0.1, 0))).metadata["pixel_size"] === 0.1
+        s = smite_smd(3); s["NFrames"] = ComplexF64(100, 0)
+        @test ld("nfc0.mat", s).n_frames == 100
+
+        # Counts and frames load exactly, with no rounding through Float64
+        big = 2^53 + 1
+        s = smite_smd(3); s["NFrames"] = big; s["FrameNum"] = col([1, 2, big])
+        smld = ld("big.mat", s)
+        @test smld.n_frames == big
+        @test smld.emitters[3].frame == big
+        @test smld.metadata["smite_row_frames"][3] == big
+
+        # A complex value, a value that is not a number, several values, a size or count below 1,
+        # or a pixel size that is not finite: an ArgumentError naming the field, nothing loaded
+        for (key, v, msg) in (("NFrames", 1.0 + 2.0im, "NFrames must be a whole number of at least 1"),
+                              ("NDatasets", 1.0 + 1.0im, "NDatasets must be a whole number"),
+                              ("XSize", 64.0 + 0.5im, "XSize must be a whole number"),
+                              ("PixelSize", 0.1 + 0.2im, "PixelSize 0.1 + 0.2im is not a real number"),
+                              ("XSize", "64", "XSize is not a number"),
+                              ("PixelSize", "0.1", "PixelSize is not a number"),
+                              ("NFrames", Any["100"], "NFrames is not a number"),
+                              ("PixelSize", col([0.1, 0.1]), "PixelSize holds 2 values"),
+                              ("YSize", col([64.0, 64.0]), "YSize holds 2 values"),
+                              ("XSize", 0.0, "XSize must be a whole number of at least 1, but is 0.0"),
+                              ("YSize", -3.0, "YSize must be a whole number of at least 1"),
+                              ("NFrames", 0.0, "NFrames must be a whole number of at least 1"),
+                              ("NDatasets", -1.0, "NDatasets must be a whole number of at least 1"),
+                              ("XSize", 1e300, "XSize must be a whole number"),
+                              ("PixelSize", Inf, "PixelSize Inf is not finite"),
+                              ("PixelSize", NaN, "PixelSize NaN is not finite"))
+            s = smite_smd(3); s[key] = v
+            err = try ld("bad_$key.mat", s); nothing catch ex; ex end
+            @test err isa ArgumentError
+            err isa ArgumentError && @test occursin(msg, err.msg)
+        end
+        # A whole number too large for an Int in a per-localization field names it, not an InexactError
+        s = smite_smd(3); s["FrameNum"] = col([1.0, 1e300, 3.0])
+        @test_throws r"FrameNum must hold whole numbers an Int holds, but row 2" ld("frame_huge.mat", s)
+        # The pixel_size keyword is checked the same way
+        @test_throws r"pixel_size is not a number" ld("pxkwtext.mat", nopx; pixel_size="0.1")
+        @test_throws r"pixel_size Inf is not finite" ld("pxkwinf.mat", nopx; pixel_size=Inf)
+        # ZSize, which SMITE does not write, may be 0 as before; 3D only
+        s3 = smite_smd_3d(3); s3["ZSize"] = 0.0
+        @test load_smite_3d(write_smd(dir, "zs0.mat", s3)).metadata["data_size"] == [64, 64, 0]
+        s = smite_smd(3); s["ZSize"] = "not read in 2D"
+        @test ld("zs2d.mat", s).metadata["ZSize"] == "not read in 2D"
+    end
+end

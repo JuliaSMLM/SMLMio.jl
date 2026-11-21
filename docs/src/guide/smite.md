@@ -58,6 +58,13 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
 - **No pixel size.** When the file has no `PixelSize`, or an empty one, pass it:
   `load_smite_2d(smd; pixel_size=0.0978)`. Without it the loader throws; it never assumes one.
   When the file has a pixel size, a different `pixel_size` is an error.
+- **Pixel size type.** The camera keeps the pixel size's floating-point type: a MATLAB single
+  `PixelSize` (or a `Float32` `pixel_size`) gives an `IdealCamera{Float32}`, a double an
+  `IdealCamera{Float64}`; another real number becomes a `Float64`. The emitters are
+  `Float64` either way. A pixel size that is complex, not finite or not positive is an error.
+- **Sizes and counts.** `XSize`, `YSize`, `NFrames` and `NDatasets` must each be one whole
+  number of at least 1, compared as stored (a count above 2^53 is not rounded). A complex
+  value, text, several values or a value below 1 is an error naming the field.
 - **Optional fields.** `Photons_SE` and `Bg_SE` load as `NaN`, `DatasetNum` as 1 and `ConnectID`
   as 0 when the file leaves them empty (SMITE leaves `ConnectID` empty before frame connection)
   or holds them with one value per dataset (some older SMITE versions). Their raw values stay in
@@ -65,8 +72,8 @@ What the loaders do with fields SMITE leaves empty or writes in another shape:
   wrong length warns.
 - **Required fields.** `X`, `Y`, `Photons`, `Bg`, `X_SE`, `Y_SE` and `FrameNum` (and `Z`, `Z_SE`
   in 3D) must hold one value per localization; otherwise the loader throws and names the field.
-  `FrameNum`, `DatasetNum` and `ConnectID` must hold whole numbers, or the loader throws and
-  names the field.
+  `FrameNum`, `DatasetNum` and `ConnectID` must hold whole numbers in `Int`'s range, or the
+  loader throws and names the field.
 - **No localizations.** SMITE leaves `XSize` and `YSize` empty in a result without
   localizations, so no camera can be built and the loader throws, naming the missing image size.
 - **One `NFrames`.** When the datasets it joins differ in length, SMITE's `catSMD` stores a list
