@@ -260,8 +260,9 @@ end
 # The whole file is written to a temporary file first (in a folder of its own, _staging_dir) and
 # copied into place only when complete,
 # in place so that an existing file keeps its owner, group, permissions and links; the guide's
-# SMITE files page states the rules. `copy` and `recreate` are seams for tests.
-function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate)
+# SMITE files page states the rules. `copy`, `recreate` and `finish` (closing a new file) are seams
+# for tests.
+function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate, finish=close)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
         throw(ArgumentError("save_smite: $(repr(target)) names no file"))
@@ -291,6 +292,7 @@ function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate)
         # it (as one open, so a folder whose default permissions make new files read-only still
         # gets the file); one that appeared at the name while the save was staged is an existing file
         created = existed ? nothing : _create_new(target)
+        made = created === nothing ? nothing : _file_id(created)
         if created === nothing
             _check_space(target, filesize(tmp) - filesize(target))
             # HDF5 refuses to recreate a file this session holds open, before it truncates it. With
@@ -301,25 +303,34 @@ function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate)
             try
                 recreate(target)
             catch e
-                after = _file_state(target)
+                after = try
+                    _file_state(target)
+                catch ie   # an interrupt: whether the file was changed is not known
+                    _incomplete(target, ie; certain=false)
+                end
                 before === nothing || after === nothing ? _incomplete(target, e; certain=false) :
                     isequal(after, before) ? rethrow() : _incomplete(target, e)
             end
         end
         try
             copy(tmp, created === nothing ? target : created)
+            # A new file is closed as part of the save: a storage error first reported at close
+            # (NFS can report a full disk or quota there) fails it as a failed write does
+            created === nothing || finish(created)
         catch e
             # A new file that could not be finished is removed, when the name is still that file
             if created !== nothing
                 try
-                    _same_file(target, created) && rm(target; force=true)
+                    close(created)
+                catch
+                end
+                try
+                    _file_id(target) == made && rm(target; force=true)
                 catch
                 end
                 rethrow()
             end
             _incomplete(target, e)
-        finally
-            created === nothing || close(created)
         end
     finally
         rm(stage; recursive=true, force=true)
@@ -329,17 +340,20 @@ end
 
 _recreate(target) = close(matopen(target, "w"))
 # What says whether a file was changed: its size, times and first 4 KiB (HDF5's superblock, after
-# MATLAB's 512-byte header); nothing when that cannot be read
+# MATLAB's 512-byte header); nothing when that cannot be read. An interrupt is passed on: the save
+# stops there, before the file is touched.
 function _file_state(path)
     try
         st = stat(path)
         head = open(io -> read(io, 4096), path, "r")
         return (st.size, st.mtime, st.ctime, head)
-    catch
+    catch e
+        e isa InterruptException && rethrow()
         return nothing
     end
 end
-_same_file(path, f) = (a = stat(path); b = stat(f); a.device == b.device && a.inode == b.inode)
+# Which file a path or an open file is (device and inode), taken while it is open
+_file_id(x) = (st = stat(x); (st.device, st.inode))
 
 # Creates `path` empty, only if nothing is there (O_EXCL), and returns it open for writing;
 # nothing when a file is already there. Any other failure is an ArgumentError naming the file.
@@ -399,12 +413,13 @@ end
 
 # Refuses before an existing file is truncated when its folder lacks the extra bytes the new
 # contents need (a quota can still stop the write). Skipped where the system cannot say,
-# including a file system that reports no size at all.
+# including a file system that reports no size at all. An interrupt is passed on.
 function _check_space(target, extra)
     extra > 0 || return nothing
     st = try
         diskstat(dirname(realpath(target)))
-    catch
+    catch e
+        e isa InterruptException && rethrow()
         return nothing
     end
     st.total == 0 && return nothing

@@ -14,6 +14,12 @@ Base.unsafe_write(c::CappedIO, p::Ptr{UInt8}, n::UInt) =
     unsafe_write(c.buf, p, min(n, UInt(max(c.cap - position(c.buf), 0))))
 Base.write(c::CappedIO, x::UInt8) = position(c.buf) < c.cap ? write(c.buf, x) : 0
 
+# A path whose every look is interrupted, as a Ctrl-C arriving while the saver reads a file's
+# state or its folder's free space
+struct InterruptingPath end
+Base.stat(::InterruptingPath) = throw(InterruptException())
+Base.realpath(::InterruptingPath) = throw(InterruptException())
+
 mutable struct ForeignEmitter3DFit{T} <: SMLMCore.AbstractEmitter   # for save_smite
     x::T; y::T; z::T; photons::T; bg::T; σ_x::T; σ_y::T; σ_z::T; σ_photons::T; σ_bg::T
     frame::Int; dataset::Int; track_id::Int; id::Int
@@ -496,6 +502,14 @@ end
             save_smite(good, dir, "r.mat")
         end
 
+        @testset "an interrupt while the saver reads a file's state or free space stops the save" begin
+            # Read before the file is recreated: swallowing it would let the save go on and replace
+            # the file the person meant to keep
+            @test_throws InterruptException SMLMio._file_state(InterruptingPath())
+            @test_throws InterruptException SMLMio._check_space(InterruptingPath(), 1)
+            @test SMLMio._file_state(joinpath(dir, "no-such-file.mat")) === nothing
+        end
+
         @testset "a new file is created exclusively; a failure removes only a file the save made" begin
             # A file that appears at the target while a save is staged is an existing file: it is
             # rewritten in place and kept if the copy fails, never removed
@@ -518,6 +532,17 @@ end
             @test_throws r"disk full" SMLMio._write_smd(q, s; copy=swapped)
             @test read(q, String) == "another program's file"
             rm(q)
+            @test isempty(ours())
+            # A storage error first reported when the new file is closed (NFS can report a full
+            # disk or quota there) fails the save, and the new file is removed
+            n = joinpath(dir, "closed.mat")
+            full(f) = (close(f); throw(Base.IOError("close: no space left on device (ENOSPC)", Base.UV_ENOSPC)))
+            @test_throws Base.IOError SMLMio._write_smd(n, s; finish=full)
+            @test !ispath(n)
+            # The same when the new file was already closed by the time the copy failed
+            closed(src, dst) = (SMLMio._copy_into(src, dst); close(dst); error("disk full"))
+            @test_throws r"disk full" SMLMio._write_smd(n, s; copy=closed)
+            @test !ispath(n)
             @test isempty(ours())
         end
 
