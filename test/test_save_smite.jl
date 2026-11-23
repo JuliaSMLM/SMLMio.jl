@@ -20,6 +20,14 @@ struct InterruptingPath end
 Base.stat(::InterruptingPath) = throw(InterruptException())
 Base.realpath(::InterruptingPath) = throw(InterruptException())
 
+# An open file whose close is interrupted (a Ctrl-C while a failed save cleans up); it records
+# that close was asked for
+mutable struct InterruptingClose <: IO
+    closed::Bool
+end
+Base.isopen(f::InterruptingClose) = !f.closed
+Base.close(f::InterruptingClose) = (f.closed = true; throw(InterruptException()))
+
 mutable struct ForeignEmitter3DFit{T} <: SMLMCore.AbstractEmitter   # for save_smite
     x::T; y::T; z::T; photons::T; bg::T; σ_x::T; σ_y::T; σ_z::T; σ_photons::T; σ_bg::T
     frame::Int; dataset::Int; track_id::Int; id::Int
@@ -544,6 +552,17 @@ end
             @test_throws r"disk full" SMLMio._write_smd(n, s; copy=closed)
             @test !ispath(n)
             @test isempty(ours())
+            # Cleanup of a new file whose identity was not taken (the look at it failed): taken
+            # from the file, still open, and the file removed
+            f = SMLMio._create_new(n)
+            @test SMLMio._remove_new(n, f, nothing) === nothing
+            @test !ispath(n) && !isopen(f)
+            # An interrupt during cleanup is passed on once the file is removed, not swallowed
+            # (a caller that went on after the save's own error would save the next file)
+            write(n, "partial")
+            c = InterruptingClose(false)
+            @test_throws InterruptException SMLMio._remove_new(n, c, SMLMio._file_id(n))
+            @test c.closed && !ispath(n)
         end
 
         @testset "metadata of a narrower value type" begin

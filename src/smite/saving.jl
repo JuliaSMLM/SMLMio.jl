@@ -292,7 +292,7 @@ function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate, fini
         # it (as one open, so a folder whose default permissions make new files read-only still
         # gets the file); one that appeared at the name while the save was staged is an existing file
         created = existed ? nothing : _create_new(target)
-        made = created === nothing ? nothing : _file_id(created)
+        made = nothing
         if created === nothing
             _check_space(target, filesize(tmp) - filesize(target))
             # HDF5 refuses to recreate a file this session holds open, before it truncates it. With
@@ -313,24 +313,16 @@ function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate, fini
             end
         end
         try
+            # Which file the save created, taken while it is open (a closed file cannot be stat'ed)
+            created === nothing || (made = _file_id(created))
             copy(tmp, created === nothing ? target : created)
             # A new file is closed as part of the save: a storage error first reported at close
             # (NFS can report a full disk or quota there) fails it as a failed write does
             created === nothing || finish(created)
         catch e
-            # A new file that could not be finished is removed, when the name is still that file
-            if created !== nothing
-                try
-                    close(created)
-                catch
-                end
-                try
-                    _file_id(target) == made && rm(target; force=true)
-                catch
-                end
-                rethrow()
-            end
-            _incomplete(target, e)
+            created === nothing && _incomplete(target, e)
+            _remove_new(target, created, made)
+            rethrow()
         end
     finally
         rm(stage; recursive=true, force=true)
@@ -340,8 +332,8 @@ end
 
 _recreate(target) = close(matopen(target, "w"))
 # What says whether a file was changed: its size, times and first 4 KiB (HDF5's superblock, after
-# MATLAB's 512-byte header); nothing when that cannot be read. An interrupt is passed on: the save
-# stops there, before the file is touched.
+# MATLAB's 512-byte header); nothing when that cannot be read. An interrupt is passed on (in the
+# read before the recreate, the save stops with the file untouched).
 function _file_state(path)
     try
         st = stat(path)
@@ -354,6 +346,25 @@ function _file_state(path)
 end
 # Which file a path or an open file is (device and inode), taken while it is open
 _file_id(x) = (st = stat(x); (st.device, st.inode))
+
+# Closes and removes a new file the save created and could not finish, when the name still holds
+# that file (`made`, its identity; when that was not taken, it is taken from the file if it is still
+# open). Each step runs whatever happens in the others; an interrupt in any of them is passed on
+# once all are done, other errors give way to the save's own.
+function _remove_new(target, created, made)
+    pending = nothing
+    step(f) = try
+        f()
+    catch e
+        e isa InterruptException && (pending = e)
+        nothing
+    end
+    id = made === nothing && isopen(created) ? step(() -> _file_id(created)) : made
+    step(() -> close(created))
+    id === nothing || step(() -> _file_id(target) == id && rm(target; force=true))
+    pending === nothing || throw(pending)
+    return nothing
+end
 
 # Creates `path` empty, only if nothing is there (O_EXCL), and returns it open for writing;
 # nothing when a file is already there. Any other failure is an ArgumentError naming the file.
