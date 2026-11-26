@@ -160,11 +160,17 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
     @testset "load_smite_2d on a 3D file says it leaves out Z" begin
         mktempdir() do dir
             smd = write_smd(dir, "three.mat", smite_smd_3d(3))
-            @test_logs (:warn, r"NDims 3.*load_smite_3d") load_smite_2d(smd)
+            @test_logs (:warn, r"Z for each localization.*load_smite_3d") load_smite_2d(smd)
             smld = quiet(() -> load_smite_2d(smd))
             @test smld.emitters[1] isa Emitter2DFit
             @test haskey(smld.metadata, "Z")
             @test_logs load_smite_2d(write_smd(dir, "two.mat", smite_smd(3)))   # 2D: no warning
+            # Z without Z_SE: load_smite_3d could not load it, so no advice to
+            s3 = smite_smd_3d(3); s3["Z_SE"] = zeros(0, 0)
+            @test_logs load_smite_2d(write_smd(dir, "zonly.mat", s3))
+            # nor with a Z_SE that is not numbers, which load_smite_3d refuses
+            s3 = smite_smd_3d(3); s3["Z_SE"] = Any["bad", "bad", "bad"]
+            @test_logs load_smite_2d(write_smd(dir, "zsetext.mat", s3))
             # Saved, the Z kept in metadata goes back with its rows, and the file says 3D.
             save_smite(smld, dir, "three-saved.mat")
             saved = matread(joinpath(dir, "three-saved.mat"))["SMD"]
@@ -190,6 +196,141 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
         mktempdir() do dir
             s = smite_smd(2); s["X"] = "not a number"
             @test_throws r"X is not numeric" load_smite_2d(write_smd(dir, "text.mat", s))
+        end
+    end
+
+    @testset "a field stored as a cell of numbers loads as a column" begin
+        # MATLAB keeps single and double values together in a cell, which MAT reads as an array
+        # of Any; SMLMData 0.7.1 loaded such a column, and save_smite 0.1.0 could write one.
+        mktempdir() do dir
+            s = smite_smd(2)
+            s["Photons"] = Any[Float32(200.0), 500.0]               # a row cell
+            s["X"] = reshape(Any[10.0f0, 40.0], :, 1)               # a column cell
+            s["FrameNum"] = Any[1.0, 2.0]
+            s["Bg_SE"] = Any[Float32(1.5), 2.5]                     # an optional field
+            s["ConnectID"] = Any[3.0, true]
+            smld = load_smite_2d(write_smd(dir, "cells.mat", s))
+            @test [e.photons for e in smld.emitters] == [200.0, 500.0]
+            @test [e.x for e in smld.emitters] ≈ ([10.0, 40.0] .- 0.5) .* 0.1
+            @test [e.frame for e in smld.emitters] == [1, 2]
+            @test [e.σ_bg for e in smld.emitters] == [1.5, 2.5]
+            @test [e.track_id for e in smld.emitters] == [3, 1]
+            @test smld.metadata["smite_row_photons"] == [200.0, 500.0]
+            # 3D: Z and Z_SE as cells
+            s3 = smite_smd_3d(2); s3["Z"] = Any[Float32(-0.25), 0.5]; s3["Z_SE"] = Any[0.04, Float32(0.05)]
+            smld3 = load_smite_3d(write_smd(dir, "cells3.mat", s3))
+            @test [e.z for e in smld3.emitters] == [-0.25, 0.5]
+            @test [e.σ_z for e in smld3.emitters] ≈ [0.04, 0.05]
+            # Each value keeps its stored type: no promotion that rounds (an Int64 with a Float32
+            # would become Float32) or fails (Int64 with UInt64)
+            s = smite_smd(2)
+            s["FrameNum"] = Any[Int64(16_777_217), 1.0f0]
+            s["Photons"] = Any[Int64(16_777_217), 1.0f0]
+            s["ConnectID"] = Any[Int64(-1), UInt64(3)]
+            smld = load_smite_2d(write_smd(dir, "cellexact.mat", s))
+            @test [e.frame for e in smld.emitters] == [16_777_217, 1]
+            @test smld.metadata["smite_row_frames"] == [16_777_217, 1]
+            @test [e.photons for e in smld.emitters] == [16_777_217.0, 1.0]
+            @test [e.track_id for e in smld.emitters] == [-1, 3]
+            if Sys.WORD_SIZE == 64
+                s = smite_smd(2); s["ConnectID"] = Any[Int64(2)^53 + 1, 2.0]
+                @test [e.track_id for e in load_smite_2d(write_smd(dir, "cellbig.mat", s)).emitters] ==
+                      [Int64(2)^53 + 1, 2]
+            end
+            # Complex values in a cell are screened as in a numeric column
+            s = smite_smd(2); s["Bg"] = Any[5.0, ComplexF64(5, 1)]
+            @test [e.id for e in quiet(() -> load_smite_2d(write_smd(dir, "cellc.mat", s))).emitters] == [1]
+            s = smite_smd(3); s["X"] = Any[10.0, ComplexF32(20, 1), Int64(30)]
+            @test [e.id for e in quiet(() -> load_smite_2d(write_smd(dir, "cellcx.mat", s))).emitters] == [1, 3]
+            # Text in an optional field is an error too, not a column of defaults; an empty one
+            # is a field SMITE left empty
+            for (key, v) in (("ConnectID", "x"), ("Bg_SE", "bad"), ("Photons_SE", "per dataset"))
+                s = smite_smd(2); s[key] = v
+                @test_throws Regex("$key is not numeric") load_smite_2d(write_smd(dir, "opttext_$key.mat", s))
+            end
+            s = smite_smd(2); s["ConnectID"] = ""
+            smld = load_smite_2d(write_smd(dir, "optempty.mat", s))
+            @test [e.track_id for e in smld.emitters] == [0, 0]
+            @test "ConnectID" in smld.metadata["smite_defaulted_fields"]
+            # A 3D file with cell Z and Z_SE, loaded in 2D (Z kept in metadata) and saved, writes
+            # them as number columns, so the saved 3D file loads
+            s3 = smite_smd_3d(2); s3["Z"] = Any[0.25f0, 0.5]; s3["Z_SE"] = Any[0.04, Float32(0.05)]
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "cellz.mat", s3)))
+            save_smite(smld, dir, "cellz-saved.mat")
+            saved = matread(joinpath(dir, "cellz-saved.mat"))["SMD"]
+            @test saved["Z"] isa AbstractArray{Float64} && saved["Z_SE"] isa AbstractArray{Float64}
+            @test saved["NDims"] == 3
+            @test [e.z for e in load_smite_3d(SmiteSMD(dir, "cellz-saved.mat")).emitters] == [0.25, 0.5]
+            # Other per-localization fields keep their MATLAB class: SMITE's IndSMD is a cell, one
+            # entry per localization (even of one index), and ThreshFlag uint32; after a filter too
+            s3 = smite_smd(3); s3["IndSMD"] = Any[1.0, [2.0, 3.0], 4.0]
+            smld = load_smite_2d(write_smd(dir, "indsmd.mat", s3))
+            @test "IndSMD" in smld.metadata["smite_per_localization_fields"]
+            kept = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[[1, 3]], smld.camera,
+                                                             smld.n_frames, smld.n_datasets, smld.metadata)
+            save_smite(kept, dir, "indsmd-saved.mat")
+            saved = matread(joinpath(dir, "indsmd-saved.mat"))["SMD"]
+            @test saved["IndSMD"] isa AbstractArray{Any} && vec(saved["IndSMD"]) == Any[1.0, 4.0]
+            @test eltype(saved["ThreshFlag"]) == UInt32
+            # An unfilled cell element, which MAT reads as an empty array of element type Union{}
+            # and cannot write, is written as an empty double array; the cell keeps its shape
+            smld.metadata["IndSMD"] = Any[Matrix{Union{}}(undef, 0, 0), [2.0, 3.0], 4.0]
+            save_smite(kept, dir, "indsmd-empty.mat")
+            saved = matread(joinpath(dir, "indsmd-empty.mat"))["SMD"]
+            @test saved["IndSMD"] isa AbstractArray{Any} && length(saved["IndSMD"]) == 2
+            @test isempty(saved["IndSMD"][1]) && saved["IndSMD"][2] == 4.0
+            # NDims 3 only when Z and Z_SE are both written, so the file loads in 3D
+            s3 = smite_smd_3d(2)
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zse.mat", s3)))
+            smld.metadata["Z_SE"] = [0.1]                     # no longer one value per file row
+            quiet(() -> save_smite(smld, dir, "zse-saved.mat"))
+            saved = matread(joinpath(dir, "zse-saved.mat"))["SMD"]
+            @test !haskey(saved, "Z_SE") && saved["NDims"] == 2
+            # A complex Z_SE in one row (SMITE's fit can give one), loaded in 2D and saved, is
+            # written as a complex column with NDims 3; load_smite_3d drops that row, as it does
+            # in the original file
+            s3 = smite_smd_3d(3); s3["Z_SE"] = col(ComplexF64[0.04, 0.05 + 0.01im, 0.04])
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zsec.mat", s3)))
+            save_smite(smld, dir, "zsec-saved.mat")
+            saved = matread(joinpath(dir, "zsec-saved.mat"))["SMD"]
+            @test saved["NDims"] == 3 && saved["Z_SE"] isa AbstractArray{ComplexF64}
+            @test [e.id for e in quiet(() -> load_smite_3d(SmiteSMD(dir, "zsec-saved.mat"))).emitters] == [1, 3]
+            # Z or Z_SE holding a value that is not a single or double is an error naming the
+            # field and the file row, and nothing is written
+            s3 = smite_smd_3d(2); s3["Z"] = Any[0.5, "bad"]
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zbad.mat", s3)))
+            @test_throws r"metadata Z of file row 2 is \"bad\".*remove it from the metadata" save_smite(
+                smld, dir, "zbad-saved.mat")
+            @test !isfile(joinpath(dir, "zbad-saved.mat"))
+            # SMITE writes NDims 2 for its 3D fits too (FindROI sets it; the fit adds Z and Z_SE):
+            # the file's populated Z makes a save 3D, with or without localizations
+            s3 = smite_smd_3d(2); s3["NDims"] = 2.0
+            smld = @test_logs (:warn, r"Z for each localization") load_smite_2d(write_smd(dir, "xyznb.mat", s3))
+            for keep in ([1], Int[])
+                sel = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[keep], smld.camera,
+                                                                smld.n_frames, smld.n_datasets, smld.metadata)
+                save_smite(sel, dir, "xyznb-saved.mat")
+                @test matread(joinpath(dir, "xyznb-saved.mat"))["SMD"]["NDims"] == 3
+            end
+            # A selection of no localizations from a 3D file loaded in 2D stays 3D
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "z3e.mat", smite_smd_3d(2))))
+            none = SmiteSMLD{Float64,eltype(smld.emitters)}(smld.emitters[Int[]], smld.camera,
+                                                             smld.n_frames, smld.n_datasets, smld.metadata)
+            save_smite(none, dir, "z3e-saved.mat")
+            @test matread(joinpath(dir, "z3e-saved.mat"))["SMD"]["NDims"] == 3
+            # Z a double would round is an error naming the field and the file row
+            s3 = smite_smd_3d(2); s3["Z"] = Any[Int64(2)^53 + 1, 0.5f0]
+            smld = quiet(() -> load_smite_2d(write_smd(dir, "zbig.mat", s3)))
+            @test_throws r"Z of file row 1 is 9007199254740993" save_smite(smld, dir, "zbig-saved.mat")
+            @test !isfile(joinpath(dir, "zbig-saved.mat"))
+            # A cell holding anything but numbers is an ArgumentError naming the field, required
+            # or optional (an optional one used to fail later with a MethodError)
+            for (key, v) in (("Photons", Any["a", "b"]), ("Y", Any[1.0, zeros(0, 0)]),
+                             ("Bg_SE", Any["a", "b"]), ("ConnectID", Any[1.0, "x"]),
+                             ("DatasetNum", Any[1.0, zeros(0, 0)]))
+                s = smite_smd(2); s[key] = v
+                @test_throws Regex("$key is not numeric") load_smite_2d(write_smd(dir, "cellbad_$key.mat", s))
+            end
         end
     end
 
@@ -486,11 +627,12 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             three = SMLMCore.@filter(a, frame <= 3)
             save_smite(three, dir, "pd3.mat")
             @test vec(matread(joinpath(dir, "pd3.mat"))["SMD"]["PValue"]) == Float32[0.9, 0.8]
-            # Metadata a user set on data not loaded from SMITE is written as given.
+            # Metadata a user set on data not loaded from SMITE is written as given; a SMITE
+            # per-localization field with one value per emitter warns that its order is unchecked.
             es = [Emitter2DFit{Float64}(1.0, 1.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5),
                   Emitter2DFit{Float64}(2.0, 2.0, 1000.0, 5.0, 0.02, 0.03, 30.0, 0.5)]
             mine = BasicSMLD(es, IdealCamera(1:64, 1:64, 0.1), 1, 1, Dict{String,Any}("PValue" => [0.5, 0.6]))
-            save_smite(mine, dir, "mine.mat")
+            @test_logs (:warn, r"PValue written in the order given") save_smite(mine, dir, "mine.mat")
             @test vec(matread(joinpath(dir, "mine.mat"))["SMD"]["PValue"]) == [0.5, 0.6]
         end
     end
@@ -532,6 +674,32 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             save_smite(a, dir, "b.mat")
             saved = matread(joinpath(dir, "b.mat"))["SMD"]
             @test isempty(saved["ConnectID"])
+            # MAT 0.10 and 0.11 read an empty MATLAB char field ('') as empty text: SMITE's own
+            # fields become empty arrays as the file is read; any other field keeps its text, and
+            # an empty-text ConnectID set by hand is written back empty
+            a.metadata["ConnectID"] = ""
+            save_smite(a, dir, "b-text.mat")
+            @test isempty(matread(joinpath(dir, "b-text.mat"))["SMD"]["ConnectID"])
+            md = SMLMio._smite_metadata(Dict{String,Any}("PixelSize" => "", "Comment" => "", "Z" => (1.0, 2.0),
+                                                         "Extra" => Dict{String,Any}("t" => (3, 4))))
+            @test md["PixelSize"] == zeros(0, 0) && md["Comment"] == "" && md["Z"] == [1.0, 2.0]
+            @test md["Extra"]["t"] == [3, 4]
+            @test SMLMio._smite_scalar("f", Dict{String,Any}("XSize" => zeros(0, 0)), "XSize") === nothing
+            fields = Dict{String,Any}("PValue" => "", "Z" => "", "X" => "", "PixelSize" => "",
+                                      "NFrames" => "", "Comment" => "", "Label" => "x")
+            SMLMio._smite_empty_text!(fields)
+            @test all(k -> fields[k] == zeros(0, 0), ("PValue", "Z", "X", "PixelSize", "NFrames"))
+            @test fields["Comment"] == "" && fields["Label"] == "x"
+            # End to end: a file without localizations whose fields are empty char fields loads
+            # with no localizations and saves again (MAT 0.10 and 0.11 read them as empty text)
+            s0 = smite_smd_3d(0)
+            for k in ("X", "Y", "FrameNum", "Z", "Z_SE", "PValue", "ConnectID")
+                s0[k] = ""
+            end
+            smld0 = load_smite_3d(write_smd(dir, "emptychar.mat", s0))
+            @test isempty(smld0.emitters)
+            save_smite(smld0, dir, "emptychar-saved.mat")
+            @test isempty(load_smite_3d(SmiteSMD(dir, "emptychar-saved.mat")).emitters)
             # A per-dataset value is not one per localization: the saved column is the NaN that
             # loaded, never the per-dataset numbers, which a later load could take for
             # per-localization uncertainties.
@@ -563,6 +731,17 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
                 @test [e.y for e in b.emitters] ≈ [2.0, 25.5] rtol = 1e-6
                 @test length(b.camera.pixel_edges_x) == length(cam.pixel_edges_x)
             end
+            # A Float32 camera (from a MATLAB single PixelSize) writes PixelSize as single and loads
+            # back as the same Float32 camera, so the saved copy combines with the original
+            orig = load_smite_2d(write_smd(dir, "px32src.mat", smite_smd(3; pixel_size=0.1f0)))
+            @test orig.camera isa IdealCamera{Float32}
+            save_smite(orig, dir, "f32cam.mat")
+            @test matread(joinpath(dir, "f32cam.mat"))["SMD"]["PixelSize"] === 0.1f0
+            back = load_smite_2d(SmiteSMD(dir, "f32cam.mat"))
+            @test back.camera isa IdealCamera{Float32}
+            @test back.camera.pixel_edges_x == orig.camera.pixel_edges_x
+            @test length(SMLMCore.cat_smld(orig, back).emitters) == 6
+            @test length(SMLMCore.merge_smld(orig, back).emitters) == 6
             # Float32 emitters keep Float32 position columns (MATLAB single), as before.
             saved = matread(joinpath(dir, "f32.mat"))["SMD"]
             @test eltype(saved["X"]) == Float32 && eltype(saved["X_SE"]) == Float32
@@ -622,8 +801,11 @@ end
             s = smite_smd(3); s[key] = v
             @test_throws Regex("$key must be a whole number") load_smite_2d(write_smd(dir, "size_$key.mat", s))
         end
+        # ZSize, which SMITE does not write, is never an error: one that is not a whole number
+        # stays in the metadata only (0.1.0 refused the file)
         s = smite_smd_3d(3); s["ZSize"] = 7.5
-        @test_throws r"ZSize must be a whole number" load_smite_3d(write_smd(dir, "size_ZSize.mat", s))
+        smld = load_smite_3d(write_smd(dir, "size_ZSize.mat", s))
+        @test smld.metadata["data_size"] == [64, 64] && smld.metadata["ZSize"] == 7.5
 
         # DatasetNum and ConnectID are checked on the loaded rows only: a row dropped by the
         # complex screening may hold anything, as before
@@ -633,5 +815,113 @@ end
         smld = quiet(() -> load_smite_2d(write_smd(dir, "dropped.mat", s)))
         @test [e.id for e in smld.emitters] == [1, 3]
         @test [e.track_id for e in smld.emitters] == [0, 2]
+    end
+end
+
+@testset "scalar fields are checked as stored, before conversion" begin
+    mktempdir() do dir
+        ld(name, s; kw...) = load_smite_2d(write_smd(dir, name, s); kw...)
+        # The camera keeps the pixel size's floating-point type, as SMLMData 0.7.1 did
+        s = smite_smd(3; pixel_size=0.125f0)
+        smld = ld("px32type.mat", s)
+        @test smld.camera isa IdealCamera{Float32}
+        @test smld.metadata["pixel_size"] === 0.125f0
+        @test [e.x for e in smld.emitters] == (Float64.(vec(s["X"])) .- 0.5) .* 0.125
+        @test smld.emitters[1] isa Emitter2DFit{Float64}
+        @test ld("px64type.mat", smite_smd(3)).camera isa IdealCamera{Float64}
+        nopx = smite_smd(3); delete!(nopx, "PixelSize")
+        @test ld("pxkw32.mat", nopx; pixel_size=0.1f0).camera isa IdealCamera{Float32}
+        @test ld("pxkw64.mat", nopx; pixel_size=0.1).camera isa IdealCamera{Float64}
+        # Every other real number becomes a Float64 (MATLAB has single and double only), so the
+        # positions are computed in Float64 whatever the pixel size's type; a complex value with
+        # no imaginary part is its real part
+        for kw in (big"0.125", Float16(0.125), 1 // 8)
+            smld = ld("pxkw_$(typeof(kw)).mat", nopx; pixel_size=kw)
+            @test smld.camera isa IdealCamera{Float64}
+            @test smld.metadata["pixel_size"] === 0.125
+            @test [e.x for e in smld.emitters] == (Float64.(vec(nopx["X"])) .- 0.5) .* 0.125
+        end
+        @test ld("pxint.mat", smite_smd(3; pixel_size=1)).metadata["pixel_size"] === 1.0
+        @test ld("pxc0.mat", smite_smd(3; pixel_size=ComplexF64(0.1, 0))).metadata["pixel_size"] === 0.1
+        s = smite_smd(3); s["NFrames"] = ComplexF64(100, 0)
+        @test ld("nfc0.mat", s).n_frames == 100
+
+        # Counts and frames load exactly, with no rounding through Float64 (an Int must hold them)
+        if Sys.WORD_SIZE == 64
+            big = Int64(2)^53 + 1
+            s = smite_smd(3); s["NFrames"] = big; s["FrameNum"] = col(Int64[1, 2, big])
+            smld = ld("big.mat", s)
+            @test smld.n_frames == big
+            @test smld.emitters[3].frame == big
+            @test smld.metadata["smite_row_frames"][3] == big
+        end
+
+        # NFrames 0 ("unknown" in the lab's packages) and NDatasets 0 load, as in 0.1.0
+        s = smite_smd(3); s["NFrames"] = 0.0; s["NDatasets"] = 0.0
+        smld = ld("zero_counts.mat", s)
+        @test smld.n_frames == 0 && smld.n_datasets == 0
+
+        # A complex value, a value that is not a number, several values, an image size below 1,
+        # a count below 0, or a pixel size that is not finite: an ArgumentError naming the field
+        for (key, v, msg) in (("NFrames", 1.0 + 2.0im, "NFrames must be a whole number of at least 0"),
+                              ("NDatasets", 1.0 + 1.0im, "NDatasets must be a whole number"),
+                              ("XSize", 64.0 + 0.5im, "XSize must be a whole number"),
+                              ("PixelSize", 0.1 + 0.2im, "PixelSize 0.1 + 0.2im is not a real number"),
+                              ("XSize", "64", "XSize is not a number"),
+                              ("PixelSize", "0.1", "PixelSize is not a number"),
+                              ("NFrames", Any["100"], "NFrames is not a number"),
+                              ("PixelSize", col([0.1, 0.1]), "PixelSize holds 2 values; SMLMio loads files with one PixelSize (SMITE's catSMD"),
+                              ("YSize", col([64.0, 64.0]), "YSize holds 2 values"),
+                              ("XSize", 0.0, "XSize must be a whole number of at least 1, but is 0.0"),
+                              ("YSize", -3.0, "YSize must be a whole number of at least 1"),
+                              ("NFrames", -1.0, "NFrames must be a whole number of at least 0"),
+                              ("NDatasets", -1.0, "NDatasets must be a whole number of at least 0"),
+                              ("XSize", 1e300, "XSize must be a whole number"),
+                              ("PixelSize", Inf, "PixelSize Inf is not finite"),
+                              ("PixelSize", NaN, "PixelSize NaN is not finite"))
+            s = smite_smd(3); s[key] = v
+            err = try ld("bad_$key.mat", s); nothing catch ex; ex end
+            @test err isa ArgumentError
+            err isa ArgumentError && @test occursin(msg, err.msg)
+        end
+        # A whole number too large for an Int in a per-localization field names it, not an InexactError
+        s = smite_smd(3); s["FrameNum"] = col([1.0, 1e300, 3.0])
+        @test_throws r"FrameNum must hold whole numbers an Int holds, but row 2" ld("frame_huge.mat", s)
+        # The pixel_size keyword is checked the same way
+        @test_throws r"pixel_size is not a number" ld("pxkwtext.mat", nopx; pixel_size="0.1")
+        @test_throws r"pixel_size Inf is not finite" ld("pxkwinf.mat", nopx; pixel_size=Inf)
+        # A Float32 pixel size whose camera edges overflow, or round onto each other, is an error
+        s = smite_smd(3; pixel_size=floatmax(Float32)); s["XSize"] = 2.0
+        @test_throws r"do not give finite, increasing pixel edges in Float32" ld("pxhuge.mat", s)
+        s = smite_smd(3; pixel_size=1.0f0); s["XSize"] = Float64(2^24 + 1); s["YSize"] = 1.0
+        @test_throws r"16777217 × 1 pixels of 1.0 µm do not give finite, increasing" ld("pxwide.mat", s)
+        s["PixelSize"] = 1.0                       # in Float64 the same image is fine
+        @test length(ld("pxwide64.mat", s).camera.pixel_edges_x) == 2^24 + 2
+        # ZSize, which SMITE does not write: in 3D a ZSize that is one whole number of at least 0
+        # is appended to data_size; every ZSize stays in the metadata (0.1.0's 3D loader dropped
+        # one of several values or text, and refused one that was not whole)
+        ld3(name, s) = load_smite_3d(write_smd(dir, name, s))
+        s3 = smite_smd_3d(3); s3["ZSize"] = 0.0
+        @test ld3("zs0.mat", s3).metadata["data_size"] == [64, 64, 0]
+        s3 = smite_smd_3d(3); s3["ZSize"] = 11.0
+        smld = ld3("zs11.mat", s3)
+        @test smld.metadata["data_size"] == [64, 64, 11] && smld.metadata["ZSize"] == 11
+        for v in (col([5.0, 6.0]), "text", -2.0, 2.5, 3.0 + 1.0im)
+            s3 = smite_smd_3d(3); s3["ZSize"] = v
+            smld = ld3("zsodd.mat", s3)
+            @test smld.metadata["data_size"] == [64, 64] && smld.metadata["ZSize"] == v
+        end
+        s = smite_smd(3); s["ZSize"] = "not read in 2D"
+        @test ld("zs2d.mat", s).metadata["ZSize"] == "not read in 2D"
+        # So any ZSize save_smite writes back loads: a native 3D SMLD's metadata ZSize of -1
+        e3 = Emitter3DFit{Float64}(1.0, 1.5, 0.5, 1000.0, 10.0, 0.01, 0.01, 0.125, 50.0, 2.0)
+        save_smite(BasicSMLD([e3], IdealCamera(1:64, 1:64, 0.1), 1, 1, Dict{String,Any}("ZSize" => -1.0)),
+                   dir, "zsneg-saved.mat")
+        smld = load_smite_3d(SmiteSMD(dir, "zsneg-saved.mat"))
+        @test smld.metadata["data_size"] == [64, 64] && smld.metadata["ZSize"] == -1
+        # A 3D round trip keeps ZSize
+        s3 = smite_smd_3d(3); s3["ZSize"] = 11.0
+        save_smite(ld3("zsrt.mat", s3), dir, "zsrt-saved.mat")
+        @test load_smite_3d(SmiteSMD(dir, "zsrt-saved.mat")).metadata["data_size"] == [64, 64, 11]
     end
 end

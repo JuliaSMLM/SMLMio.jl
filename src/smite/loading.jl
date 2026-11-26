@@ -4,7 +4,7 @@ function _complex_rows(cols, fields)
     rows = Dict{String,Vector{Int}}()
     for f in fields
         v = cols[f]
-        eltype(v) <: Complex || continue
+        eltype(v) <: Real && continue      # a cell's values may be complex in a Vector{Number}
         r = findall(x -> !iszero(imag(x)), v)
         isempty(r) || (rows[f] = r)
     end
@@ -18,11 +18,75 @@ _smite_length(_) = -1
 _smite_vec(v::AbstractArray) = vec(v)
 _smite_vec(v::Number) = [v]
 
-# A scalar field (XSize, PixelSize, ...) as a Float64, or nothing when it is absent or empty.
-function _smite_scalar(s, key)
+# A per-localization field as a vector of numbers, or nothing when it is not numeric. MAT reads a
+# MATLAB cell of numbers (single and double values together, say) as an array of Any; its values
+# are kept as stored, in a Vector{Number}, and each is checked and converted on its own where it
+# is used: promoting them to one type could round them (an Int64 with a Float32 gives Float32).
+function _smite_numeric(v)
+    v isa Number && return [v]
+    v isa AbstractArray || return nothing
+    v isa AbstractArray{<:Number} && return vec(v)
+    all(x -> x isa Number, v) || return nothing
+    return Number[x for x in vec(v)]
+end
+
+# A field left empty: a 0 x 0 matrix or an empty cell (empty text in SMITE's own fields is made one
+# by _smite_empty_text!, as a file is read and before a save).
+_smite_empty(v) = v isa AbstractArray && isempty(v)
+
+# SMITE's scalar fields the loaders read.
+const _SMITE_SCALARS = ("PixelSize", "XSize", "YSize", "NFrames", "NDatasets", "NDims", "ZSize")
+
+# MAT 0.10 and 0.11 read an empty MATLAB char field ('') as empty text, later versions as an empty
+# array (an empty double, which SMITE writes, is an empty array in every version). SMITE's own
+# fields, the ones the loaders read, are made an empty array here, once, so every rule sees one
+# kind of empty field; any other field keeps the class the file gave it.
+function _smite_empty_text!(s)
+    for k in collect(keys(s))
+        (k in _SMITE_STACKABLE || k in _SMITE_SCALARS) && s[k] isa AbstractString && isempty(s[k]) &&
+            (s[k] = zeros(0, 0))
+    end
+    return s
+end
+
+# A scalar field (XSize, PixelSize, ...) as the file stores it, or nothing when it is absent or
+# empty; the caller checks it before converting it. Several values, or a value that is not a
+# number, is an ArgumentError naming the field.
+function _smite_scalar(where, s, key)
     v = get(s, key, nothing)
-    _smite_length(v) == 1 || return nothing
-    return Float64(real(first(v)))
+    v === nothing && return nothing
+    _smite_empty(v) && return nothing
+    k = _smite_length(v)
+    k == 1 && first(v) isa Number && return first(v)
+    throw(ArgumentError(k > 1 ? "$where: $key holds $k values; SMLMio loads files with one $key " *
+                                "(SMITE's catSMD stores a list of a field that differs between the " *
+                                "datasets it joins, such as NFrames when they differ in length)" :
+                                "$where: $key is not a number"))
+end
+
+# The pixel size as MATLAB's single or double: a Float32 (a MATLAB single PixelSize) stays
+# Float32 and gives a Float32 camera, as in SMLMData 0.7.1; every other real number becomes a
+# Float64. It must be real, finite and positive.
+function _smite_pixel_size(where, what, v)
+    v isa Number || throw(ArgumentError("$where: $what is not a number"))
+    iszero(imag(v)) || throw(ArgumentError("$where: $what $v is not a real number"))
+    r = real(v)
+    px = r isa Float32 ? r : Float64(r)
+    isfinite(px) || throw(ArgumentError("$where: $what $px is not finite"))
+    px > 0 || throw(ArgumentError("$where: pixel size $px is not positive"))
+    return px
+end
+
+# The camera the loaders build from XSize, YSize and the pixel size. In Float32, a large image or
+# pixel size can give edges that are not finite or that round onto each other, which is an
+# ArgumentError; save_smite checks the camera it writes with this too.
+function _smite_camera(where, xsize, ysize, px)
+    camera = IdealCamera(1:xsize, 1:ysize, px)
+    increasing(e) = all(isfinite, e) && all(k -> e[k+1] > e[k], 1:length(e)-1)
+    increasing(camera.pixel_edges_x) && increasing(camera.pixel_edges_y) || throw(ArgumentError(
+        "$where: $xsize × $ysize pixels of $px µm do not give finite, increasing pixel edges " *
+        "in $(typeof(px))"))
+    return camera
 end
 
 # Per-localization fields every SMITE fit writes; a file without one of them cannot be loaded.
@@ -55,6 +119,7 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
         read(file, smd.varname)
     end
     s isa AbstractDict || throw(ArgumentError("$(smd.filename): $(smd.varname) is not a structure"))
+    _smite_empty_text!(s)
     where = "$(smd.filename) ($(smd.varname))"
 
     haskey(s, "X") || throw(ArgumentError("$where has no X field"))
@@ -65,60 +130,63 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     for key in (three_d ? vcat(_SMITE_REQUIRED, _SMITE_REQUIRED_3D) : _SMITE_REQUIRED)
         v = get(s, key, nothing)
         v === nothing && throw(ArgumentError("$where has no $key field"))
-        v isa Union{Number,AbstractArray{<:Number}} || throw(ArgumentError("$where: $key is not numeric"))
-        _smite_length(v) == n || throw(ArgumentError(
-            "$where: $key holds $(_smite_length(v)) values for $n localizations"))
-        cols[key] = _smite_vec(v)
+        c = _smite_numeric(v)
+        c === nothing && throw(ArgumentError("$where: $key is not numeric"))
+        length(c) == n || throw(ArgumentError("$where: $key holds $(length(c)) values for $n localizations"))
+        cols[key] = c
     end
     defaulted = String[]
     mismatched = String[]
     for (key, default) in _SMITE_OPTIONAL
         v = get(s, key, nothing)
-        if v !== nothing && _smite_length(v) == n
-            cols[key] = _smite_vec(v)
+        c = v === nothing ? nothing : _smite_numeric(v)
+        # Present and not empty, an optional field must be numeric
+        v !== nothing && c === nothing && !_smite_empty(v) &&
+            throw(ArgumentError("$where: $key is not numeric"))
+        if c !== nothing && length(c) == n
+            cols[key] = c
         else
             cols[key] = fill(default, n)
             push!(defaulted, key)
-            v !== nothing && _smite_length(v) > 0 && push!(mismatched, key)
+            c !== nothing && !isempty(c) && push!(mismatched, key)
         end
     end
-    !three_d && _smite_scalar(s, "NDims") == 3 && n > 0 && _smite_length(get(s, "Z", nothing)) == n &&
-        @warn("$where has NDims 3; load_smite_2d leaves out Z (kept in metadata), load_smite_3d loads it")
+    # SMITE writes NDims 2 for its own 3D fits too, so numeric Z and Z_SE with one value per
+    # localization say 3D (and that load_smite_3d can load the file)
+    zfit(k) = (zc = haskey(s, k) ? _smite_numeric(s[k]) : nothing; zc !== nothing && length(zc) == n)
+    !three_d && n > 0 && zfit("Z") && zfit("Z_SE") &&
+        @warn("$where has Z for each localization (a 3D fit); load_smite_2d leaves out Z (kept in " *
+              "metadata), load_smite_3d loads it")
     isempty(mismatched) || @warn("$where: $(join(mismatched, ", ")) do not hold one value per " *
         "localization ($n); loaded as their defaults (NaN, or 1 for DatasetNum, 0 for ConnectID), " *
         "raw values kept in metadata")
 
     # Pixel size (microns) and image size
-    file_px = _smite_scalar(s, "PixelSize")
+    raw_px = _smite_scalar(where, s, "PixelSize")
+    file_px = raw_px === nothing ? nothing : _smite_pixel_size(where, "PixelSize", raw_px)
+    arg_px = pixel_size === nothing ? nothing : _smite_pixel_size(where, "pixel_size", pixel_size)
     px = if file_px === nothing
-        pixel_size === nothing && throw(ArgumentError(
+        arg_px === nothing && throw(ArgumentError(
             "$where has no PixelSize; pass pixel_size (microns per pixel) to load it"))
-        Float64(pixel_size)
+        arg_px
     else
         # rtol 1e-6: a PixelSize stored as MATLAB single matches the decimal it was written from
-        pixel_size === nothing || isapprox(pixel_size, file_px; rtol=1e-6) || throw(ArgumentError(
+        arg_px === nothing || isapprox(arg_px, file_px; rtol=1e-6) || throw(ArgumentError(
             "$where has PixelSize $file_px µm, but pixel_size = $pixel_size was passed"))
         file_px
     end
-    px > 0 || throw(ArgumentError("$where: pixel size $px is not positive"))
-    xsize = _smite_scalar(s, "XSize")
-    ysize = _smite_scalar(s, "YSize")
+    xsize = _smite_scalar(where, s, "XSize")
+    ysize = _smite_scalar(where, s, "YSize")
     (xsize === nothing || ysize === nothing) && throw(ArgumentError(
         "$where has no image size (XSize, YSize absent or empty; $n localizations), so its camera " *
         "cannot be built"))
-    # SMITE's catSMD joins NFrames into a list when the joined datasets differ in length
-    for key in ("NFrames", "NDatasets")
-        k = _smite_length(get(s, key, nothing))
-        k > 1 && throw(ArgumentError("$where: $key holds $k values; SMLMio loads files with one " *
-            "$key (SMITE's catSMD stores a list of NFrames when the datasets it joins differ in length)"))
-    end
-    nframes = _smite_scalar(s, "NFrames")
-    ndatasets = _smite_scalar(s, "NDatasets")
+    nframes = _smite_scalar(where, s, "NFrames")
+    ndatasets = _smite_scalar(where, s, "NDatasets")
     (nframes === nothing || ndatasets === nothing) && throw(ArgumentError(
         "$where has no NFrames or NDatasets"))
-    xsize, ysize = _smite_int(where, "XSize", xsize), _smite_int(where, "YSize", ysize)
-    nframes, ndatasets = _smite_int(where, "NFrames", nframes), _smite_int(where, "NDatasets", ndatasets)
-    camera = IdealCamera(1:xsize, 1:ysize, px)
+    xsize, ysize = _smite_count(where, "XSize", xsize), _smite_count(where, "YSize", ysize)
+    nframes, ndatasets = _smite_count(where, "NFrames", nframes), _smite_count(where, "NDatasets", ndatasets)
+    camera = _smite_camera(where, xsize, ysize, px)
 
     # Screen complex values in the per-localization columns read from the file
     fields_to_check = filter(k -> !(k in defaulted),
@@ -137,9 +205,9 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     # Frames, datasets and track ids become Int: each value must be a whole number. FrameNum is
     # kept for every file row (the row record save_smite checks), the others for the loaded rows.
     for (key, rows) in (("FrameNum", 1:n), ("DatasetNum", valid_indices), ("ConnectID", valid_indices))
-        bad = findfirst(i -> !_is_whole(cols[key][i]), rows)
+        bad = findfirst(i -> !_fits_int(cols[key][i]), rows)
         bad === nothing || throw(ArgumentError(
-            "$where: $key must hold whole numbers, but row $(rows[bad]) is $(cols[key][rows[bad]])"))
+            "$where: $key must hold whole numbers an Int holds, but row $(rows[bad]) is $(cols[key][rows[bad]])"))
     end
 
     # SMITE stores X, Y and their standard errors in pixels, with (1, 1) the center of the top-left
@@ -164,11 +232,16 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
 
     # Metadata
     data_size = [ysize, xsize]
-    zsize = _smite_scalar(s, "ZSize")   # SMITE's SMD has no ZSize; kept when a file has one
-    three_d && zsize !== nothing && push!(data_size, _smite_int(where, "ZSize", zsize))
+    # SMITE's SMD has no ZSize, and nothing here depends on one: load_smite_3d appends a ZSize that
+    # is one whole number of at least 0 to data_size, and every ZSize stays in the metadata (so
+    # save_smite writes it back), whatever it holds.
+    zsize = get(s, "ZSize", nothing)
+    if three_d && _smite_length(zsize) == 1
+        z = first(zsize)
+        _fits_int(z) && real(z) >= 0 && push!(data_size, Int(real(z)))
+    end
     # Every other SMITE field, and the raw value of an optional field loaded as its default
-    used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"],
-                    three_d ? ["ZSize"] : String[]))
+    used = Set(vcat(collect(keys(cols)), ["XSize", "YSize", "NFrames", "NDatasets", "PixelSize"]))
     setdiff!(used, defaulted)
     metadata = Dict{String,Any}(k => v for (k, v) in s if !(k in used || k in _SMITE_LOADER_KEYS))
     # SMITE's per-localization fields among them, with one value per file row: save_smite writes
@@ -193,13 +266,26 @@ function _load_smite(smd::SmiteSMD, three_d::Bool, pixel_size)
     SmiteSMLD{Float64,E}(emitters, camera, nframes, ndatasets, metadata)
 end
 
-# SMITE stores counts and indices as doubles; one becomes an Int only when it is a whole number.
-_is_whole(x) = iszero(imag(x)) && isinteger(real(x))
+# SMITE stores counts and indices as doubles; one becomes an Int only when it is a whole number
+# an Int holds, compared exactly (no rounding through Float64). A complex value counts when its
+# imaginary part is zero.
+_fits_int(x) = x isa Number && iszero(imag(x)) && isinteger(real(x)) &&
+               typemin(Int) <= real(x) <= typemax(Int)
 
-function _smite_int(where, key, v)
-    _is_whole(v) || throw(ArgumentError("$where: $key must be a whole number, but is $v"))
+# Lower bounds of the image sizes and counts, which save_smite applies too, so that every file it
+# writes loads. An image needs a pixel; n_frames 0 means "unknown" in the lab's packages (frame
+# connection, trajectories), and n_datasets 0 an SMLD without datasets.
+const _SMITE_COUNT_MIN = Dict("XSize" => 1, "YSize" => 1, "NFrames" => 0, "NDatasets" => 0)
+
+# An image size or count as an Int: a whole number of at least its bound.
+function _smite_count(where, key, v)
+    lo = _SMITE_COUNT_MIN[key]
+    _fits_int(v) && real(v) >= lo ||
+        throw(ArgumentError("$where: $key must be a whole number of at least $lo, but is $v"))
     return Int(real(v))
 end
+
+_is_ndims3(v) = _smite_length(v) == 1 && first(v) isa Number && first(v) == 3
 
 """
     load_smite_2d(smd::SmiteSMD; pixel_size=nothing) -> SmiteSMLD
@@ -208,8 +294,9 @@ Load a 2D SMITE SMD into a [`SmiteSMLD`](@ref) of `Emitter2DFit{Float64}`.
 
 SMITE stores `X`, `Y`, `X_SE` and `Y_SE` in pixels, with (1, 1) the center of the top-left pixel.
 They load in µm from the camera's corner: `x = (X - 0.5) * PixelSize`,
-`σ_x = X_SE * PixelSize`. The camera is an `IdealCamera` of `XSize` by `YSize` pixels. How the
-loaders treat empty and per-dataset fields, and what is kept in the metadata, is on the
+`σ_x = X_SE * PixelSize`. The camera is an `IdealCamera` of `XSize` by `YSize` pixels:
+`IdealCamera{Float32}` for a MATLAB single `PixelSize`, otherwise `IdealCamera{Float64}`. How
+the loaders treat empty and per-dataset fields, and what is kept in the metadata, is on the
 [SMITE files](@ref) page.
 
 # Arguments
@@ -217,7 +304,9 @@ loaders treat empty and per-dataset fields, and what is kept in the metadata, is
 
 # Keyword Arguments
 - `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize` (absent or
-  empty); when the file has one, a different `pixel_size` is an error.
+  empty), and then a `Float32` one gives a `Float32` camera; when the file has one, a
+  `pixel_size` that differs from it by more than one part in a million is an error, and the
+  file's value is used.
 
 # Returns
 - [`SmiteSMLD`](@ref): the emitters in µm, with `n_frames` frames per dataset and the SMD's
@@ -227,9 +316,11 @@ loaders treat empty and per-dataset fields, and what is kept in the metadata, is
 - Throws an `ArgumentError` when the file has no pixel size and none is passed, no image size
   (`XSize`, `YSize`; SMITE leaves them empty in a result without localizations), no `NFrames` or
   `NDatasets` or several of them, or a required field (`X`, `Y`, `Photons`, `Bg`, `X_SE`,
-  `Y_SE`, `FrameNum`) without one value per localization; and when `XSize`, `YSize`, `NFrames`
-  or `NDatasets` is not a whole number, or `FrameNum`, `DatasetNum` or `ConnectID` holds a value
-  that is not (`DatasetNum` and `ConnectID` in the loaded rows).
+  `Y_SE`, `FrameNum`) without one value per localization; when `XSize` or `YSize` is not one
+  whole number of at least 1, `NFrames` or `NDatasets` not one of at least 0, `FrameNum`, `DatasetNum` or
+  `ConnectID` holds a value that is not a whole number in `Int`'s range (`DatasetNum` and
+  `ConnectID` in the loaded rows); and when the pixel size (the file's or `pixel_size`) is
+  not a positive, finite real number.
 - Emitters with non-zero imaginary components are excluded with a warning.
 
 # Example
@@ -257,18 +348,19 @@ load_smite_2d(smd::SmiteSMD; pixel_size=nothing) = _load_smite(smd, false, pixel
 
 Load a 3D SMITE SMD into a [`SmiteSMLD`](@ref) of `Emitter3DFit{Float64}`.
 
-Positions load as in [`load_smite_2d`](@ref); `Z` and `Z_SE` are µm in SMITE and load
-unchanged. The file also needs `Z` and `Z_SE` with one value per localization. SMITE's SMD has
-no `ZSize`; when a file has one, it is appended to `metadata["data_size"]`, and a `ZSize` that
-is not a whole number is an `ArgumentError`. Everything else (optional fields, metadata,
+Positions load as in [`load_smite_2d`](@ref); `Z` and `Z_SE` are µm in SMITE and load in µm,
+as `Float64`. The file also needs `Z` and `Z_SE` with one value per localization. SMITE's SMD has
+no `ZSize`; every `ZSize` a file has stays in the metadata, and one that is one whole number of
+at least 0 that fits an `Int` is also appended to `metadata["data_size"]`. Everything else (optional fields, metadata,
 `pixel_size`, the errors it throws) is as in [`load_smite_2d`](@ref).
 
 # Arguments
 - `smd::SmiteSMD`: the file and variable to load.
 
 # Keyword Arguments
-- `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize`; when the
-  file has one, a different `pixel_size` is an error.
+- `pixel_size=nothing`: µm per pixel, needed only when the file has no `PixelSize`, and then a
+  `Float32` one gives a `Float32` camera; when the file has one, a `pixel_size` that differs
+  from it by more than one part in a million is an error, and the file's value is used.
 
 # Returns
 - [`SmiteSMLD`](@ref): the emitters in µm.

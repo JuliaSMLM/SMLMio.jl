@@ -57,15 +57,17 @@ SMLD of the fit emitters of a SMITE SMD; the SMD's other fields are kept in `met
 # Fields
 - `emitters::Vector{E}`: the localizations; positions and uncertainties in µm.
 - `camera::AbstractCamera`: an `IdealCamera` of `XSize` × `YSize` pixels of `PixelSize` µm, built
-  from the file (an sCMOS calibration is not in the file).
-- `n_frames::Int`: frames per dataset (SMITE's `NFrames`); `frame` runs from 1 to `n_frames` in
-  each dataset.
+  from the file (an sCMOS calibration is not in the file); `Float32` for a MATLAB single
+  `PixelSize` (or a `Float32` `pixel_size` when the file has none), otherwise `Float64`.
+- `n_frames::Int`: frames per dataset (SMITE's `NFrames`); in SMITE's convention `frame` runs
+  from 1 to `n_frames` in each dataset, which the loaders do not check. 0 means "unknown".
 - `n_datasets::Int`: number of datasets (SMITE's `NDatasets`).
 - `metadata::Dict{String,Any}`: the SMD's other fields and the loaders' entries; see
   [SMITE files](@ref).
 
 # Constructors
-Returned by [`load_smite_2d`](@ref) and [`load_smite_3d`](@ref), with `T` = `Float64`. To build
+Returned by [`load_smite_2d`](@ref) and [`load_smite_3d`](@ref), with `T` = `Float64`, the
+emitters' number type (the camera may be `Float32`, as above). To build
 one, give both type parameters: `SmiteSMLD{Float64,E}(emitters, camera, n_frames, n_datasets,
 metadata)`. [`save_smite`](@ref) takes any SMLD of fit emitters, so building one is rarely needed.
 """

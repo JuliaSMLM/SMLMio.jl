@@ -2,6 +2,100 @@
 
 ## 0.1.1 (unreleased)
 
+Changed:
+
+- `save_smite` saves the values SMITE files and the lab's packages hold, and refuses anything
+  else with one `ArgumentError` naming the field, the emitter (or file row), the value and its
+  type, before anything is written. Emitter values (`x`, `y`, `z`, `photons`, `bg` and their
+  uncertainties) must be `Float32` or `Float64`; `frame`, `dataset`, `track_id`, `n_frames` and
+  `n_datasets` integers of at most 2^53 in size; camera edges `Float32` or `Float64` values or
+  such integers. Metadata `Z` and `Z_SE` written as coordinates may also hold complex singles
+  and doubles, as SMITE's fits give them. 0.1.0 wrote integer and complex emitter values (MAT
+  refused `Float16` and `BigFloat` ones), and saved 3D data whose `z` was not `Float32` or
+  `Float64` (`missing`, `Float16`) without `Z`, with a warning; each is now an error.
+- `save_smite` writes the new file in full beside the old one, in the same folder, and renames
+  it over the old one, so the name holds the old file or the whole new one. 0.1.0 wrote a
+  temporary file and copied it into the existing file in place, so an error during the copy (a
+  full disk, a file size limit, a lost share, an interruption) left the file partly written, a
+  write cut short without an error reported success, saves running at once could share one
+  temporary file (named from the process id and the clock), and with HDF5 file locking on,
+  replacing a file another program had open emptied it. Now a failed save leaves the old file
+  as it was, a program reading the old file goes on reading it, and saves running at once each
+  write a whole file. The saved file is a new file: it is owned by whoever saves and has the
+  folder's usual mode for a new file (0.1.0 kept the old file's owner, mode and hard links), and
+  a save needs permission to create a file in the folder and room for the new file beside the
+  old one. A rename that fails, or is interrupted, keeps the new file, complete, and names it: on
+  the lab's network share (CIFS), a file another program has open cannot be replaced, and the
+  share then deletes the old file, so the kept file holds the data.
+
+Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
+
+- Scalar fields were converted to `Float64` before they were checked. A complex `NFrames`,
+  `NDatasets`, `XSize`, `YSize` or `PixelSize` loaded as its real part, counts above 2^53 were
+  rounded, and a MATLAB single `PixelSize` gave an `IdealCamera{Float64}` (SMLMData 0.7.1 gave
+  an `IdealCamera{Float32}`). Each is now checked as stored, and counts load exactly. A single
+  `PixelSize` gives an `IdealCamera{Float32}` again (any other pixel size a `Float64` camera),
+  and `save_smite` writes a `Float32` camera's `PixelSize` as single, so the file loads back
+  with the same camera; a `Float32` pixel size whose camera edges overflow or round onto each
+  other, or a pixel size that is not finite, is an `ArgumentError`. `XSize`
+  and `YSize` must be whole numbers of at least 1 (0 or below loaded a camera with no pixels),
+  `NFrames` and `NDatasets` whole numbers of at least 0; a value with a non-zero imaginary part,
+  text or several values is an `ArgumentError` naming the field, and a `pixel_size` passed to
+  the loader no longer stands in for a `PixelSize` of several values or text. A `FrameNum`,
+  `DatasetNum` or `ConnectID` value too large for an `Int` is an `ArgumentError`, not an
+  `InexactError`. In 3D, `ZSize` (which SMITE does not write) now stays in the metadata, so a
+  save and load keeps it, and is never an error: one whole number of at least 0 that fits an
+  `Int` is appended to `data_size`, anything else is only kept (0.1.0 refused a `ZSize` that was
+  not whole).
+- `save_smite` wrote `n_frames`, `n_datasets` and each emitter's `frame`, `dataset` and
+  `track_id` as doubles without checking them, so a value a double cannot hold exactly was saved
+  rounded, and values the loaders refuse (a negative `n_frames`, a frame of 2.5) were written.
+  Each must now be an integer of at most 2^53 in size, which a double holds exactly, with
+  `n_frames` and `n_datasets` at least 0. Any other value, a whole `Float64` or a rational
+  included, is an `ArgumentError` naming it, and nothing is written.
+- The loaders refused a per-localization field stored as a MATLAB cell of numbers (MAT reads it
+  as an array of `Any`), which SMLMData 0.7.1 loaded: "Photons is not numeric". Such a field
+  now loads as a numeric column, each value checked and converted as stored, so an integer
+  frame or track id in a cell is never rounded. An optional field (`Photons_SE`, `Bg_SE`,
+  `DatasetNum`, `ConnectID`) holding something other than numbers, text included, is an
+  `ArgumentError` naming it, where it failed later with a `MethodError` or, for text, loaded
+  as a column of defaults. Empty text, which MAT 0.10 and 0.11 read for an empty MATLAB char
+  field (`''`), is made an empty array in SMITE's own fields as the file is read, so it is an
+  empty field everywhere, as an empty array is (other fields keep their text); an empty-text
+  `ConnectID` set by hand is written back empty.
+- `save_smite` of emitters of `Float32` and `Float64` together (a `Union` element type) wrote
+  `Photons`, `Bg`, their errors and `Z`, `Z_SE` as MATLAB cells, which MAT makes of a vector of
+  mixed types, so `load_smite_3d` refused its own file; a 3D file with such cells, loaded in 2D
+  and saved, kept its cell `Z`. A column of all `Float32` is now written as single and any
+  other as double. Positions in SMITE's pixels are computed in `Float64` from the written pixel
+  size, where a `Float32` camera rounded them, and each finite one must be finite in pixels;
+  `save_smite` refuses a camera whose edges are not, within a thousandth of a pixel, those its
+  loaders rebuild from the written pixel size (the check rounded in the camera's own type, so a
+  `Float32` camera far from the origin passed and loaded back with other edges), or that they
+  could not build back (no pixels along an axis, a pixel size that is not finite as written,
+  `Float32` edges that round onto each other). 3D data whose `z` mixes `Float32` and `Float64`
+  save their `Z` instead of
+  dropping it. `Z` and `Z_SE` kept in the metadata by `load_smite_2d` are written the same way
+  for 2D emitters (complex values too, as SMITE's fits give them, written as complex double), as
+  are metadata `Z` and `Z_SE` with one value per emitter on data not loaded
+  by SMLMio (built by hand, or loaded by SMLMData 0.7.1), in the order given, as 0.1.0 wrote
+  them, so a save and a save of its load agree. Such data carry no record of which localization
+  each value belongs to, so `save_smite` now warns, naming every SMITE per-localization field it
+  writes from the metadata in the order given (a sort, filter or join before saving would
+  misplace them);
+  the file says `NDims` 3 when both are written and it has localizations, its `Z` had values
+  (SMITE writes `NDims` 2 for its 3D fits) or the metadata's `NDims` is 3. Every other
+  per-localization field keeps its MATLAB class (SMITE's `IndSMD` stays a cell); an unfilled
+  cell element, which MAT reads as an array it cannot write, is written as an empty double
+  array (0.1.0 failed to save such a file), in a cell or a struct-valued field too, and a tuple
+  in the metadata is written as the array it holds (MAT 0.10 refused it). Other metadata keeps
+  its MATLAB class as in 0.1.0: a cell of structs stays a cell, an array of Dicts an array of
+  Dicts (a struct array with MAT 0.13, a cell with MAT 0.10), and a MATLAB object its class. A MATLAB struct array or object that recent MAT versions
+  read as their own types (`MatlabStructArray`, `MatlabClassObject`) is written as it is, so one
+  holding an unfilled cell element still cannot be saved.
+- `load_smite_2d` warned that it leaves `Z` out only for a file marked `NDims` 3, but SMITE marks
+  its own 3D fits `NDims` 2; it now warns when `Z` and `Z_SE` hold one number per localization.
+
 ## 0.1.0 (2026-11-16)
 
 - Created from SMLMData 0.7.1's SMITE I/O: `SmiteSMD`, `SmiteSMLD`, `load_smite_2d`,

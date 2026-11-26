@@ -14,7 +14,11 @@ Which fields are written, which are dropped and what a load gives back are on th
   `n_frames`, `n_datasets` and `metadata`) whose emitters have `x`, `y`, `photons`, `bg`, `σ_x`,
   `σ_y`, `σ_photons`, `σ_bg`, `frame`, `dataset` and `track_id`, as `Emitter2DFit` and
   `Emitter3DFit` do (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and
-  `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved.
+  `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved. Emitter values must be
+  `Float32` or `Float64` (metadata `Z` and `Z_SE` written as coordinates may also be complex
+  ones); `frame`, `dataset` and `track_id` integers, and `n_frames` and `n_datasets` integers of
+  at least 0, each of at most 2^53 in size; camera edges `Float32` or `Float64` values or such
+  integers. Anything else is an `ArgumentError` naming it.
 - `filepath::AbstractString`: an existing folder.
 - `filename::AbstractString`: name of the `.mat` file; an existing file of that name is
   rewritten.
@@ -23,10 +27,14 @@ Which fields are written, which are dropped and what a load gives back are on th
 - `nothing`.
 
 # Notes
-- The file is written in full to a temporary file before the target is touched, so a save that
-  fails while writing leaves an existing file as it was; only an error during the final copy
-  (a full disk, a lost share) can leave it partly written. What it refuses, and how a file is
-  rewritten, are on the [SMITE files](@ref) page.
+- The file is written in full to a new file in the same folder and then renamed over the
+  target, so the name holds the old file or the whole new one, and a save that fails while
+  writing leaves an existing file as it was. A rename that fails, or is interrupted, keeps the
+  new file and names it; on the lab's network share (CIFS) a file another program has open
+  cannot be replaced, and the share then deletes the old file, so the name can hold neither
+  file and the kept new file holds the data. The saved file is a new file (owned by whoever
+  saves, with the folder's usual mode for a new file). What it refuses, and how a file is
+  replaced, are on the [SMITE files](@ref) page.
 
 - `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
   load as 0.
@@ -50,72 +58,93 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # Create SMD structure
     s = Dict{String,Any}()
 
-    # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose z and σ_z columns
-    # MAT writes as MATLAB single or double. Anything else saves without Z; non-empty 3D or mixed
-    # data that lose Z get a warning.
+    # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose every emitter has
+    # z and σ_z. Anything else saves without Z; non-empty 3D or mixed data that lose Z get a
+    # warning.
     d = emitter_ndims(smld.emitters)
+    n = length(smld.emitters)
     zcols = nothing
-    if eltype(smld.emitters) <: Emitter3DFit
-        zcols = ([e.z for e in smld.emitters], [e.σ_z for e in smld.emitters])
-    elseif d == 3 && !isempty(smld.emitters) &&
-           all(e -> hasproperty(e, :z) && hasproperty(e, :σ_z), smld.emitters)
-        z, σz = [e.z for e in smld.emitters], [e.σ_z for e in smld.emitters]
-        eltype(z) in (Float32, Float64) && eltype(σz) in (Float32, Float64) && (zcols = (z, σz))
+    if eltype(smld.emitters) <: Emitter3DFit || (d == 3 && n > 0 &&
+           all(e -> hasproperty(e, :z) && hasproperty(e, :σ_z), smld.emitters))
+        zcols = (_lab_column("z", [e.z for e in smld.emitters]),
+                 _lab_column("σ_z", [e.σ_z for e in smld.emitters]))
     end
-    if zcols === nothing && !isempty(smld.emitters)
+    # The emitters' own Z was not saved: metadata Z and Z_SE, below, must not stand in for it
+    lostz = zcols === nothing && n > 0 && d !== 2
+    if lostz
         d === nothing && @warn("save_smite: mixed 2D/3D emitters: Z not saved; " *
                                "save 2D and 3D data separately")
-        d == 3 && @warn("save_smite: 3D emitters without Float32/Float64 z and σ_z: Z not saved")
+        d == 3 && @warn("save_smite: 3D emitters without σ_z: Z not saved")
     end
-    
+
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
     # the center of the top-left pixel; positions here are microns from the camera's corner.
-    # SMITE has one PixelSize, so the camera's pixels must be uniform and square: every edge lies
-    # on the first pixel's grid to a thousandth of a pixel (edges carry floating rounding, which
-    # in a Float32 camera grows with distance from the origin).
+    # SMITE has one PixelSize, so the camera must be the one the loaders will build from XSize,
+    # YSize and the written pixel size (single for a Float32 camera, so the file loads back with a
+    # Float32 camera; otherwise double): each edge, relative to the camera's first, within a
+    # thousandth of a pixel of the rebuilt camera's, compared in Float64 (exact for the edges
+    # accepted: single, double, and integers up to 2^53).
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
-    x0, y0 = ex[1], ey[1]
-    px = ex[2] - ex[1]
-    on_grid(edges, e0) = all(k -> abs(edges[k] - (e0 + (k - 1) * px)) <= px / 1000, eachindex(edges))
-    px > 0 && on_grid(ex, x0) && on_grid(ey, y0) ||
-        throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels " *
-                            "are not uniform and square"))
+    nx, ny = length(ex) - 1, length(ey) - 1
+    nx >= _SMITE_COUNT_MIN["XSize"] && ny >= _SMITE_COUNT_MIN["YSize"] || throw(ArgumentError(
+        "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must be at least " *
+        "$(_SMITE_COUNT_MIN["XSize"]) and $(_SMITE_COUNT_MIN["YSize"])"))
+    edge_ok(v) = v isa _LAB_REAL ? isfinite(v) : _lab_whole(v)
+    for (axis, edges) in (("x", ex), ("y", ey))
+        bad = findfirst(!edge_ok, edges)
+        bad === nothing || throw(ArgumentError("save_smite: the camera's pixel edge $bad along $axis " *
+            "is $(repr(edges[bad])) ($(typeof(edges[bad]))); SMLMio saves edges that are finite " *
+            "Float32 or Float64 values, or integers of at most 2^53 in size; nothing was written"))
+    end
+    fx, fy = Vector{Float64}(ex), Vector{Float64}(ey)
+    x0, y0 = fx[1], fy[1]
+    px = fx[2] - fx[1]
+    pxw = _smite_pixel_size("save_smite", "the camera's pixel size", eltype(ex) === Float32 ? Float32(px) : px)
+    rebuilt = _smite_camera("save_smite", nx, ny, pxw)
+    pxf = Float64(pxw)
+    same(f, re) = all(k -> abs((f[k] - f[1]) - Float64(re[k])) <= pxf / 1000, eachindex(f))
+    same(fx, rebuilt.pixel_edges_x) && same(fy, rebuilt.pixel_edges_y) ||
+        throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels are " *
+                            "not uniform and square (its edges are not those of $nx × $ny pixels of " *
+                            "$pxw µm)"))
+    # Positions in SMITE's pixels are computed in Float64 from the written pixel size, as the
+    # loaders compute them back
     iszero(x0) && iszero(y0) || @warn("save_smite: the camera's first pixel edge is at ($x0, $y0) µm; " *
         "SMITE has no origin, so the file loads back with the camera at 0 and positions moved by that offset")
-    s["X"] = _same_float([e.x for e in smld.emitters], e -> (e.x - x0) / px + 0.5, smld.emitters)
-    s["Y"] = _same_float([e.y for e in smld.emitters], e -> (e.y - y0) / px + 0.5, smld.emitters)
+    s["X"] = _pixel_column("x", [e.x for e in smld.emitters], x0, pxf)
+    s["Y"] = _pixel_column("y", [e.y for e in smld.emitters], y0, pxf)
     if zcols !== nothing
         s["Z"] = zcols[1]
     end
     
-    s["Photons"] = [e.photons for e in smld.emitters]
-    s["Bg"] = [e.bg for e in smld.emitters]
+    s["Photons"] = _lab_column("photons", [e.photons for e in smld.emitters])
+    s["Bg"] = _lab_column("bg", [e.bg for e in smld.emitters])
     
-    s["X_SE"] = _same_float([e.σ_x for e in smld.emitters], e -> e.σ_x / px, smld.emitters)
-    s["Y_SE"] = _same_float([e.σ_y for e in smld.emitters], e -> e.σ_y / px, smld.emitters)
+    s["X_SE"] = _pixel_column("σ_x", [e.σ_x for e in smld.emitters], nothing, pxf)
+    s["Y_SE"] = _pixel_column("σ_y", [e.σ_y for e in smld.emitters], nothing, pxf)
     if zcols !== nothing
         s["Z_SE"] = zcols[2]
     end
     
-    s["Photons_SE"] = [e.σ_photons for e in smld.emitters]
-    s["Bg_SE"] = [e.σ_bg for e in smld.emitters]
-    
+    s["Photons_SE"] = _lab_column("σ_photons", [e.σ_photons for e in smld.emitters])
+    s["Bg_SE"] = _lab_column("σ_bg", [e.σ_bg for e in smld.emitters])
+
     # Counts and indices are doubles, as most SMITE results files hold them (MATLAB integer arithmetic
-    # rounds)
-    s["FrameNum"] = Float64[e.frame for e in smld.emitters]
-    s["DatasetNum"] = Float64[e.dataset for e in smld.emitters]
-    s["ConnectID"] = Float64[e.track_id for e in smld.emitters]
+    # rounds): integers a double holds exactly
+    s["FrameNum"] = _lab_counts("frame", [e.frame for e in smld.emitters])
+    s["DatasetNum"] = _lab_counts("dataset", [e.dataset for e in smld.emitters])
+    s["ConnectID"] = _lab_counts("track_id", [e.track_id for e in smld.emitters])
 
     # Add metadata: what the loaders need to read the file back, from the camera
-    s["NFrames"] = Float64(smld.n_frames)
-    s["NDatasets"] = Float64(smld.n_datasets)
-    s["XSize"] = Float64(length(ex) - 1)
-    s["YSize"] = Float64(length(ey) - 1)
-    s["PixelSize"] = Float64(px)
+    s["NFrames"] = _lab_count("n_frames", smld.n_frames, "NFrames")
+    s["NDatasets"] = _lab_count("n_datasets", smld.n_datasets, "NDatasets")
+    s["XSize"] = Float64(nx)
+    s["YSize"] = Float64(ny)
+    s["PixelSize"] = pxw
     s["NDims"] = zcols === nothing ? 2.0 : 3.0
 
-    md = smld.metadata
+    md = _smite_metadata(smld.metadata)
 
     # Optional fields the file left empty, which the loader filled with defaults and that still hold
     # only the default, go back empty (SMITE treats an empty ConnectID differently from zeros). A
@@ -123,7 +152,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # raw values are not one per localization, and a later load could take them for that.
     defaulted = get(md, "smite_defaulted_fields", String[])
     for (key, default) in _SMITE_OPTIONAL
-        key in defaulted && haskey(md, key) && _smite_length(md[key]) == 0 &&
+        key in defaulted && haskey(md, key) && _smite_empty(md[key]) &&
             all(v -> isequal(v, default), s[key]) && (s[key] = md[key])
     end
 
@@ -158,20 +187,65 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         end
     end
 
+    # Z and Z_SE in the metadata with one value per saved emitter: for data loaded from SMITE, the
+    # listed per-localization fields, by row (load_smite_2d keeps them from a 3D file); for other
+    # data (built by hand, or loaded by SMLMData 0.7.1, which kept a 3D file's Z that way), fields
+    # with as many values as emitters, in the order given, as 0.1.0 wrote them. Such data carry no
+    # record of which row each value belongs to (ids are not that: a join, a filter or frame
+    # connection keeps or reuses them), so that order cannot be checked; the warning below says
+    # so. On 2D emitters they are written through the same rule as the emitters' z, so a save and
+    # a later save of its load agree, except that complex values (SMITE's fits give them; a 2D load
+    # does not screen Z) are written as complex double. The file says NDims 3 when both are written
+    # and it has localizations, the loaded file's Z had values (SMITE writes NDims 2 for its 3D
+    # fits too) or the metadata's NDims is 3. When the emitters' own Z was not saved (lostz),
+    # metadata Z and Z_SE are not saved at all.
+    loaded = haskey(md, "smite_per_localization_fields")
+    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "emitter", collect(1:n), n > 0
+    if zcols === nothing && !lostz
+        if loaded
+            zkeys = filter(k -> k in towrite, ["Z", "Z_SE"])
+            zsrc = [_smite_vec(md[k])[rows] for k in zkeys]
+            zunit, zids, zhad = "file row", rows, any(k -> _smite_length(md[k]) > 0, zkeys)
+        else
+            zkeys = filter(k -> haskey(md, k) && _smite_length(md[k]) == n, ["Z", "Z_SE"])
+            zsrc = [_smite_vec(md[k]) for k in zkeys]
+        end
+    end
+    mdz = Dict{String,Any}()
+    for (k, src) in zip(zkeys, zsrc)
+        mdz[k] = _lab_column("metadata $k", src; complex=true, unit=zunit, ids=zids,
+                             hint=" (remove it from the metadata to save without it)")
+    end
+    ndims3_from_md = length(mdz) == 2 && (n > 0 || zhad || _is_ndims3(get(md, "NDims", nothing)))
+    # Data not loaded by SMLMio: SMITE's per-localization fields written from the metadata with one
+    # value per emitter are in the order given, which save_smite cannot check. Fields written from
+    # the emitters (s holds them by now) are not among them; Z and Z_SE count when written (mdz).
+    unchecked = loaded || n == 0 ? String[] :
+        sort!([k for (k, v) in md if k in _SMITE_STACKABLE && _smite_length(v) == n &&
+               (k in ("Z", "Z_SE") ? haskey(mdz, k) : !haskey(s, k))])
+    isempty(unchecked) || @warn("save_smite: $(join(unchecked, ", ")) written in the order given, one " *
+        "value per emitter: these data were not loaded by SMLMio, so nothing records which " *
+        "localization each value belongs to (a sort, filter, join or frame connection since the " *
+        "values were made would misplace them)")
+
     # Add any additional fields from metadata, except the loaders' own entries. For data loaded
     # from SMITE, a field SMITE stacks per localization that is not listed as one value per file
     # row (the file held it otherwise, often one value per dataset, or it was added after loading)
     # is dropped when the saved localizations are as many as its values, since a load would take
     # it for one value per localization; with another count it is written as it is.
-    loaded = haskey(md, "smite_per_localization_fields")
-    nsaved = length(smld.emitters)
     ambiguous = String[]
     for (key, value) in md
         (key in _SMITE_LOADER_KEYS || haskey(s, key)) && continue
+        if key in ("Z", "Z_SE") && (lostz || key in zkeys)
+            haskey(mdz, key) && (s[key] = mdz[key])
+            continue
+        end
         if key in perloc
             key in towrite || continue
+            # Every other field keeps its MATLAB class: SMITE's IndSMD is a cell, one entry per
+            # localization, and ThreshFlag is uint32
             value = _smite_vec(value)[rows]
-        elseif loaded && key in _SMITE_STACKABLE && nsaved > 0 && _smite_length(value) == nsaved
+        elseif loaded && key in _SMITE_STACKABLE && n > 0 && _smite_length(value) == n
             push!(ambiguous, key)
             continue
         end
@@ -181,21 +255,22 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         "per localization, they are not listed in smite_per_localization_fields as one value per file " *
         "row, and with as many values as saved localizations a load would take them for one value per " *
         "localization; list a field there, with one value per file row, to save it by row")
-    # A 3D file loaded as 2D keeps Z in metadata, written back above for each emitter: say 3D
-    zcols === nothing && !isempty(smld.emitters) && haskey(s, "Z") &&
-        _smite_length(s["Z"]) == length(smld.emitters) && (s["NDims"] = 3.0)
+    ndims3_from_md && (s["NDims"] = 3.0)
     
-    # MAT truncates the target before it checks a struct's keys. Check them all first; an
-    # existing file is rewritten only once the new contents are complete.
+    # Every key is checked first, so one error names them all
     _check_mat_keys(s)
     _write_smd(joinpath(String(filepath), String(filename)), s)
     return nothing
 end
 
-# The whole file is written to a temporary file first and copied into place only when complete,
-# in place so that an existing file keeps its owner, group, permissions and links; the guide's
-# SMITE files page states the rules. `copy` is a seam for tests.
-function _write_smd(target::String, s; copy=_copy_into)
+# The file is written in full to a new file beside the target and then renamed over it, so the
+# name holds the old file or the whole new one, never a partial one, and a program that has the
+# old file open goes on reading the old contents (local disks and NFS; the CIFS share refuses the
+# rename, below). The new file is created as any new file in
+# that folder is (owned by whoever saves, with the mode the folder's defaults give); a symbolic
+# link keeps pointing at the saved file. The guide's SMITE files page states the rules.
+# `rename` and `lookup` are seams for tests.
+function _write_smd(target::String, s; rename=_rename, lookup=ispath)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
         throw(ArgumentError("save_smite: $(repr(target)) names no file"))
@@ -207,68 +282,110 @@ function _write_smd(target::String, s; copy=_copy_into)
         throw(ArgumentError("save_smite: $(repr(target)) is a symlink to nothing"))
     ispath(target) && !isfile(target) &&
         throw(ArgumentError("save_smite: $(repr(target)) is not a regular file"))
-    existed = isfile(target)
-    if existed
+    path = islink(target) ? realpath(target) : target
+    # An existing file you may not write is refused, as a write would be: the rename needs only
+    # the folder's permission, and would replace a file someone made read-only
+    if isfile(path)
         try
-            close(open(target, "r+"))
+            close(open(path, "r+"))
         catch e
             e isa SystemError || rethrow()
             throw(ArgumentError("save_smite: $(repr(target)) cannot be written: " *
                                 Libc.strerror(e.errnum)))
         end
     end
-    tmp = joinpath(tempdir(), string("smlmio-", getpid(), "-", time_ns(), ".tmp"))
+    tmp, mode = _new_beside(path)
     try
         matwrite(tmp, Dict("SMD" => s))
-        if existed
-            _check_space(target, filesize(tmp) - filesize(target))
-            # HDF5 refuses to recreate a file it holds open, before anything changes
-            close(matopen(target, "w"))
+        mode === nothing || chmod(tmp, mode)
+    catch
+        _best_effort(() -> rm(tmp; force=true))
+        rethrow()
+    end
+    # A rename that fails keeps the new file, complete, and names it: on the lab's network share
+    # (CIFS), a refused replace (another program has the file open, for one) makes the share delete
+    # the old file, at once or when that program closes it, so the new file may then be the only
+    # copy of the data. So does an interrupt. A new file no longer beside the target means the
+    # rename may have completed (NFS can report an error for a rename it carried out); one that
+    # cannot be looked for (the folder cannot be read) leaves that unknown. Either way the target is
+    # named to check, and an interrupt is passed on after a warning that says the same.
+    try
+        rename(tmp, path)
+    catch e
+        interrupted = e isa InterruptException
+        kept = try
+            lookup(tmp)
+        catch le
+            le isa InterruptException && (interrupted = true)
+            nothing
         end
-        try
-            copy(tmp, target)
-        catch e
-            # A new file that could not be finished is removed
-            existed || (try rm(target; force=true) catch end; rethrow())
-            e isa InterruptException && rethrow()
-            # An existing file was truncated: say so, and that the data can be saved again
-            error("save_smite: writing $(repr(target)) failed partway, so that file is now " *
-                  "incomplete and its old contents are gone. The data are unchanged in memory: " *
-                  "save again once the cause is fixed. The error was: $(sprint(showerror, e))")
+        msg = if kept === true
+            "the new file could not be renamed over $(repr(target)): $(sprint(showerror, e)). The " *
+            "data are saved in full in $(repr(tmp)); rename it to $(repr(basename(path))) once the " *
+            "cause is fixed. On the lab's network share (CIFS) a file another program has open " *
+            "cannot be replaced, and the share then deletes the old file."
+        else
+            "renaming the new file $(repr(tmp)) over $(repr(target)) reported " *
+            "$(sprint(showerror, e)), and " * (kept === false ?
+                "the new file is no longer beside it, so the save may have completed" :
+                "the folder cannot be read, so whether the save completed is not known") *
+            "; check $(repr(target))."
         end
-    finally
-        rm(tmp; force=true)
+        interrupted && (@warn("save_smite: interrupted; $msg"); throw(InterruptException()))
+        error("save_smite: $msg")
     end
     return nothing
 end
 
-# Copies the file `src` into `dst` in place (truncating it, or creating it).
-function _copy_into(src, dst)
-    open(src, "r") do from
-        open(dst, "w") do to
-            buf = Vector{UInt8}(undef, 1 << 20)
-            while !eof(from)
-                n = readbytes!(from, buf)
-                write(to, view(buf, 1:n))
-            end
-        end
-    end
+# A rename as the one system call. Base.Filesystem.rename on Julia 1.10 and 1.11 copies the file
+# and removes the source when the call fails, which could put a partial file at the name.
+function _rename(src, dst)
+    err = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), src, dst)
+    err < 0 && Base.uv_error("rename($(repr(src)), $(repr(dst)))", err)
+    return nothing
 end
 
-# Refuses before an existing file is truncated when its folder lacks the extra bytes the new
-# contents need (a quota can still stop the write). Skipped where the system cannot say,
-# including a file system that reports no size at all.
-function _check_space(target, extra)
-    extra > 0 || return nothing
-    st = try
-        diskstat(dirname(realpath(target)))
-    catch
-        return nothing
+# A new, empty file in `path`'s folder under a name no other file has, created exclusively (so
+# no other save can take the same name) with the mode any new file there gets: the system applies
+# the user's umask and the folder's default permissions. It is closed. Returns its name, and the
+# mode to give it back once written when that mode does not let its owner read and write it (a
+# folder whose default permissions make new files read-only): it is made so meanwhile.
+function _new_beside(path)
+    dir = dirname(path)
+    isempty(dir) && (dir = ".")
+    F = Base.Filesystem
+    for _ in 1:100
+        tmp = tempname(dir; cleanup=false)
+        f = try
+            F.open(tmp, F.JL_O_WRONLY | F.JL_O_CREAT | F.JL_O_EXCL, 0o666)
+        catch e
+            e isa Base.IOError && e.code == Base.UV_EEXIST && continue
+            e isa Base.IOError || rethrow()
+            throw(ArgumentError("save_smite: cannot create a file in $(repr(dir)) to save into: " *
+                                sprint(showerror, e)))
+        end
+        try
+            close(f)
+            m = filemode(tmp) & 0o7777
+            m & 0o600 == 0o600 && return tmp, nothing
+            chmod(tmp, m | 0o600)
+            return tmp, m
+        catch
+            _best_effort(() -> rm(tmp; force=true))
+            rethrow()
+        end
     end
-    st.total == 0 && return nothing
-    free = st.available
-    free >= extra || throw(ArgumentError("save_smite: $(repr(target)) needs $extra more bytes " *
-                                         "than its folder has free ($free)"))
+    error("save_smite: found no unused file name in $(repr(dir))")
+end
+
+# Cleanup inside a catch: an error of its own (a lost share) gives way to the error being handled,
+# and an interrupt during it is passed on in its place, never swallowed.
+function _best_effort(f)
+    try
+        f()
+    catch e
+        e isa InterruptException && rethrow()
+    end
     return nothing
 end
 
@@ -301,10 +418,119 @@ function _collect_bad_keys!(bad, path, v::AbstractArray)
 end
 _collect_bad_keys!(bad, path, _) = nothing
 
-# The column f(e) for each emitter, in the float type of the emitters' own column `col` when that
-# is Float32 or Float64 (MATLAB single or double), so Float32 data stay single.
-function _same_float(col, f, emitters)
-    vals = [f(e) for e in emitters]
-    T = eltype(col)
-    return T in (Float32, Float64) ? convert(Vector{T}, vals) : vals
+# A value as MAT can write it, changed only where it must be. MAT reads an unfilled element of a
+# MATLAB cell as an empty array of element type Union{}, which its writer refuses; such an element
+# is written as an empty double array, as SMITE holds an empty field. A tuple (metadata built in
+# Julia) is written as the array it holds; MAT 0.10 refuses tuples. Arrays (cells, or struct
+# arrays of Dicts) and plain Dicts (MATLAB structs) are searched; a changed one is a copy whose
+# element type is widened only as far as the new values need, so a cell of structs stays a cell
+# and an array of Dicts an array of Dicts, and one that needs no change is returned as it is.
+# MAT's own types (a class object, a function handle, a struct array) are written as they are,
+# keeping their MATLAB class; MAT cannot write one holding an unfilled cell element.
+_mat_writable(v::AbstractArray{Union{}}) = zeros(size(v))
+function _mat_writable(v::AbstractArray)
+    eltype(v) <: Union{Number,AbstractString} && return v
+    out = v
+    for i in eachindex(v)
+        isassigned(v, i) || continue
+        x = v[i]
+        y = _mat_writable(x)
+        y === x && continue
+        out === v && (out = copy(v))
+        # widened only as far as the new value needs: an array of Dicts (a MATLAB struct array)
+        # stays one, a cell stays a cell
+        y isa eltype(out) || (out = Array{typejoin(eltype(out), typeof(y))}(out))
+        out[i] = y
+    end
+    return out
 end
+_mat_writable(v::Tuple) = _mat_writable(collect(v))
+function _mat_writable(v::Dict)
+    out = v
+    for (k, x) in v
+        y = _mat_writable(x)
+        y === x && continue
+        out === v && (out = copy(v))
+        y isa valtype(out) || (out = Dict{keytype(v),Any}(out))
+        out[k] = y
+    end
+    return out
+end
+_mat_writable(v) = v
+
+# The metadata as save_smite reads it, a copy that takes any value (metadata of a narrower value
+# type, such as Dict{String,String}, included): every value made writable (_mat_writable), and
+# empty text in SMITE's own fields made an empty array, as the loaders do (_smite_empty_text!).
+function _smite_metadata(md)
+    out = Dict{keytype(md),Any}(md)
+    for (k, v) in md
+        out[k] = _mat_writable(v)
+    end
+    return _smite_empty_text!(out)
+end
+
+# What save_smite writes: the values SMITE files and the lab's packages hold. A measured value (a
+# position, an uncertainty, photons, background, z) is a single or double, Float32 or Float64; Z
+# and Z_SE kept in metadata from a file may also be complex, as SMITE's fits can give them. A
+# count or index (frame, dataset, track id, n_frames, n_datasets), or a camera edge given as an
+# integer, is an integer a double holds exactly: at most 2^53 in size. Anything else is one
+# ArgumentError naming the field, before anything is written.
+const _LAB_REAL = Union{Float32,Float64}
+const _LAB_NUMBER = Union{Float32,Float64,ComplexF32,ComplexF64}
+
+# The column `what` as MATLAB writes it: single when every value is Float32, otherwise double
+# (complex double when a value is complex and `complex` allows it). MAT writes a vector whose
+# element type is not concrete as a cell, which SMITE cannot compute with, hence the conversion,
+# exact for these types. `unit` and `ids` say where a refused value is: an emitter and its index,
+# or a file row and its row.
+function _lab_column(what, col; complex=false, unit="emitter", ids=eachindex(col), hint="")
+    ok = complex ? _LAB_NUMBER : _LAB_REAL
+    bad = findfirst(v -> !(v isa ok), col)
+    bad === nothing || throw(ArgumentError("save_smite: $what of $unit $(ids[bad]) is " *
+        "$(repr(col[bad])) ($(typeof(col[bad]))); SMLMio saves " *
+        (complex ? "single or double values, real or complex" : "Float32 or Float64 values") *
+        "$hint; nothing was written"))
+    isempty(col) && return eltype(col) === Float32 ? Float32[] : Float64[]
+    all(v -> v isa Float32, col) && return Vector{Float32}(col)
+    all(v -> v isa _LAB_REAL, col) && return Vector{Float64}(col)
+    return Vector{ComplexF64}(col)
+end
+
+# A column in SMITE's pixels from the emitters' values: a position (`origin`, the camera's first
+# edge) X = (x - origin) / px + 0.5, or an uncertainty (`origin` nothing) X_SE = σ / px, computed
+# in Float64, then single when the emitters' column is all Float32. A finite value that the
+# loaders would read back as infinite, or a non-zero uncertainty they would read back as 0 (values
+# far outside any microscope's range), is an ArgumentError naming the emitter.
+function _pixel_column(what, col, origin, px)
+    own = _lab_column(what, col)
+    x = Vector{Float64}(own)
+    vals = origin === nothing ? x ./ px : (x .- origin) ./ px .+ 0.5
+    out = eltype(own) === Float32 ? Vector{Float32}(vals) : vals
+    back(X) = origin === nothing ? Float64(X) * px : (Float64(X) - 0.5) * px   # as the loaders compute
+    ok(i) = !isfinite(own[i]) ||
+        (isfinite(back(out[i])) && (origin !== nothing || iszero(own[i]) || !iszero(back(out[i]))))
+    bad = findfirst(!ok, eachindex(own))
+    bad === nothing || throw(ArgumentError("save_smite: $what of emitter $bad is $(own[bad]), which " *
+        "a MATLAB $(eltype(out) === Float32 ? "single" : "double") in SMITE's pixels cannot hold so " *
+        "that it loads back; nothing was written"))
+    return out
+end
+
+# An integer a MATLAB double holds exactly: at most 2^53 in size, and at least `lo`.
+_lab_whole(v, lo=-2^53) = v isa Integer && max(lo, -2^53) <= v <= 2^53
+
+# A count as a MATLAB double, at least the loaders' bound for `key` (_SMITE_COUNT_MIN), so that
+# every file save_smite writes loads; and the emitters' indices `what`, one per emitter.
+function _lab_count(what, v, key)
+    lo = _SMITE_COUNT_MIN[key]
+    _lab_whole(v, lo) || _not_whole(what, v, lo)
+    return Float64(v)
+end
+function _lab_counts(what, vals)
+    bad = findfirst(v -> !_lab_whole(v), vals)
+    bad === nothing || _not_whole("$what of emitter $bad", vals[bad], nothing)
+    return Float64[Float64(v) for v in vals]
+end
+_not_whole(what, v, lo) = throw(ArgumentError("save_smite: $what is $(repr(v)) ($(typeof(v))); " *
+    "SMITE stores it as a MATLAB double, so SMLMio saves an integer" *
+    (lo === nothing ? "" : " of at least $lo") * " of at most 2^53 in size; nothing was written"))
