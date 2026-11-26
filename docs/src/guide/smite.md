@@ -121,8 +121,8 @@ save_smite(smld, "output/directory", "processed_Results.mat")
 a [`SmiteSMLD`](@ref), a `BasicSMLD`, or your own type with `emitters`, `camera`, `n_frames`,
 `n_datasets` and `metadata`. `Emitter2D` and `Emitter3D` cannot be saved. The folder must exist.
 A missing folder, a folder (or anything but a file) of the file's name, a symlink to nothing, a
-name that is no file, an existing file you may not write, too little free space to rewrite one
-(where the system reports it), a camera whose pixels are not uniform and square (its edges,
+name that is no file, an existing file you may not write, a folder in which no new file can be
+created (the save writes its new file there first), a camera whose pixels are not uniform and square (its edges,
 relative to its first, are not within a thousandth of a pixel of those the loaders rebuild from
 `XSize`, `YSize` and the written `PixelSize`), whose edges are not all finite `Float32` or
 `Float64` values or integers of at most 2^53 in size, or that
@@ -135,41 +135,28 @@ underscores; Dict values and arrays of Dicts need such string keys) are each an
 
 The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the loaders read. It
 holds no `SMF`, so SMITE tools that also load an `SMF` need one from the original results file.
-The file is written in full to a temporary file in the system's temporary folder (`tempdir()`,
-which `TMPDIR` sets on Linux and macOS; it must exist and have room for one copy) and only then
-copied into place. Each save writes in a new folder of its own there, so saves of different
-files never share a temporary file, from several threads or from several processes (containers
-sharing the folder included). HDF5.jl before 0.16.13 does not lock its calls into the HDF5
-library, so with those versions (MAT allows HDF5.jl 0.14 and later) use MAT and HDF5 from one
-thread at a time in the whole session: loads and saves, SMLMio's and any other. A save that
-fails while writing (MAT refusing a value) leaves an existing file as it was and creates none.
-An existing file this session holds open through HDF5 is refused before it is touched (HDF5
-refuses to recreate it); when HDF5 refuses it after changing it, or whether it changed cannot be
-established, the error says the file is (or may be) incomplete. A new file is created only if
-nothing is at the name, and written through the open that created it (a folder whose default
-permissions make new files read-only still gets the file); a file that appears at the name
-while a save is staged is treated as an existing file, and a failed save removes a file only
-while the name is still the file it created.
+The file is written in full to a new file in the same folder (named like `jl_XXXXXX`, created
+as any new file there is) and then renamed over the target, so the name holds the old file or
+the whole new one, never a partial one. A save that fails (MAT refusing a value, a full disk, a
+lost network share, an interruption) leaves an existing file as it was, removes its new file
+where it can and creates none at the name (a program killed during a save can leave its `jl_`
+file); the data are unchanged in memory, so save again once the cause is fixed. On a local disk
+or NFS, a program that has the old file open goes on reading the old contents. Two saves to the
+same file at once each write a whole file, and the name ends with the one renamed last. A rename
+that fails is the exception: the new file stays, complete, and the error names it, so that you
+can rename it into place. On the lab's network share (CIFS), as kitt mounts it, a file another
+program has open cannot be replaced: the save fails, and the share deletes the old file when
+that program closes it, so the new file named in the error then holds the data. Windows also
+refuses to replace a file another program has open.
+HDF5.jl before 0.16.13 does not lock its calls into the HDF5 library, so with those versions
+(MAT allows HDF5.jl 0.14 and later) use MAT and HDF5 from one thread at a time in the whole
+session: loads and saves, SMLMio's and any other.
 
-`save_smite` does not coordinate with other programs using the same file at the same time; an
-existing file is rewritten in place, as a direct write would rewrite it, and as in 0.1.0:
-
-- With HDF5 file locking on (for example `HDF5_USE_FILE_LOCKING=TRUE` when the program starts),
-  replacing a file another program has open through HDF5 empties it, because HDF5 truncates the
-  file before it finds that program's lock; the error then says the file is incomplete.
-- Two programs saving to the same file at once can leave a file that holds parts of both saves,
-  each reporting success. Save each result to its own file, or one at a time.
-- A program that renames or replaces the file while a save rewrites it can have the save write
-  into, or the cleanup of a failed new file miss, the file it put there.
-
-An existing file keeps
-its owner, permissions and links, as with a direct write (for a symlink, the file it points to
-is rewritten). An error once the file is being rewritten (a full disk, a file size limit, a
-lost network share, an interruption) can leave it partly written, as with a direct write; the
-error then says the file is incomplete (an interruption is passed on as it is, after a warning
-that says so). A write that takes fewer bytes than it was given is such an error, and so is a
-file that ends up shorter than the copy. The data are unchanged in memory, so save again once
-the cause is fixed. It contains:
+The saved file is a new file, not the old one rewritten: it is owned by whoever saves and has
+the mode the folder gives a new file, and a hard link to the old file keeps the old contents.
+On the lab's network shares every file shows the same owner and mode, so a replaced file looks
+as the old one did. A symbolic link stays a link to the saved file (the file it points to is
+replaced). It contains:
 
 - `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`.
   `save_smite` saves the values SMITE files and the lab's packages hold: each of these must be a

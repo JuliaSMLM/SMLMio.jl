@@ -4,30 +4,6 @@ using SMLMio, Test
 using SMLMCore: SMLMCore, IdealCamera, Emitter2DFit, Emitter3DFit, emitter_ndims
 using MAT: MAT, matread, matwrite, matopen
 
-# An IO that takes at most `cap` bytes in all, as a file under a size limit does: a write past the
-# limit takes what fits and says how many bytes it took, without an error
-struct CappedIO <: IO
-    buf::IOBuffer
-    cap::Int
-end
-Base.unsafe_write(c::CappedIO, p::Ptr{UInt8}, n::UInt) =
-    unsafe_write(c.buf, p, min(n, UInt(max(c.cap - position(c.buf), 0))))
-Base.write(c::CappedIO, x::UInt8) = position(c.buf) < c.cap ? write(c.buf, x) : 0
-
-# A path whose every look is interrupted, as a Ctrl-C arriving while the saver reads a file's
-# state or its folder's free space
-struct InterruptingPath end
-Base.stat(::InterruptingPath) = throw(InterruptException())
-Base.realpath(::InterruptingPath) = throw(InterruptException())
-
-# An open file whose close is interrupted (a Ctrl-C while a failed save cleans up); it records
-# that close was asked for
-mutable struct InterruptingClose <: IO
-    closed::Bool
-end
-Base.isopen(f::InterruptingClose) = !f.closed
-Base.close(f::InterruptingClose) = (f.closed = true; throw(InterruptException()))
-
 mutable struct ForeignEmitter3DFit{T} <: SMLMCore.AbstractEmitter   # for save_smite
     x::T; y::T; z::T; photons::T; bg::T; σ_x::T; σ_y::T; σ_z::T; σ_photons::T; σ_bg::T
     frame::Int; dataset::Int; track_id::Int; id::Int
@@ -388,12 +364,6 @@ end
     e = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
     mk(md) = SmiteSMLD{Float64,Emitter2DFit{Float64}}([e], cam, 1, 1, md)
     good = mk(Dict{String,Any}("analysis_date" => "today"))
-    # Saves stage in the system's temporary folder: a private one here, so that only this test's
-    # staging folders are counted (other processes sharing the system's folder, containers with
-    # the same process id among them, can hold folders with the same prefix)
-    private = mktempdir()
-    ours() = filter(startswith("smlmio-"), readdir(private))
-    withenv("TMPDIR" => private, "TMP" => private, "TEMP" => private) do
     mktempdir() do dir
         save_smite(good, dir, "r.mat")
         before = read(joinpath(dir, "r.mat"))
@@ -425,17 +395,20 @@ end
             @test read(joinpath(dir, "r.mat")) == before
         end
 
-        @testset "a write that fails midway leaves the existing file" begin
-            # MAT cannot write Float16: the failure comes from matwrite, after the keys check
+        @testset "a write that fails midway leaves the existing file and no other" begin
+            # MAT cannot write Float16: the failure comes from matwrite, after the keys check,
+            # while it writes the new file beside the old one
             @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "r.mat")
             @test read(joinpath(dir, "r.mat")) == before
+            @test readdir(dir) == ["r.mat"]
+            @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "new.mat")
             @test readdir(dir) == ["r.mat"]
         end
 
         @testset "normal saves are unaffected" begin
             ok = mk(Dict{String,Any}("analysis_date" => "later", "a" => "a" ^ 100,
                                      "z" ^ 63 => 1.0, "inner" => Dict("k_1" => 2.0)))
-            @test_logs save_smite(ok, dir, "r.mat")   # overwrites the existing file
+            @test_logs save_smite(ok, dir, "r.mat")   # replaces the existing file
             smd = matread(joinpath(dir, "r.mat"))["SMD"]
             @test smd["analysis_date"] == "later"
             @test smd["inner"]["k_1"] == 2.0
@@ -458,116 +431,87 @@ end
             @test readdir(dir) == ["r.mat"]
         end
 
-        # No staging folder may be left in the temporary folder
-        @test tempdir() == private
-        @testset "saves running at once never share a temporary file" begin
-            # Each save writes in a new folder of its own (mkdtemp), not at a name from the clock,
-            # which two threads can read at the same nanosecond, nor from a process id, which
-            # processes in different containers sharing the folder can have in common
-            names = fill("", 256)
-            Threads.@threads for i in eachindex(names)
-                names[i] = SMLMio._staging_dir()
-            end
-            @test allunique(names) && all(isdir, names) && all(isempty ∘ readdir, names)
-            @test all(startswith(joinpath(tempdir(), "smlmio-$(getpid())-")), names)
-            foreach(rm, names)
-            @test isempty(ours())
-        end
-        @testset "a new file whose write fails is not left behind" begin
-            @test_throws Exception save_smite(mk(Dict{String,Any}("h" => Float16(1))), dir, "new.mat")
+        @testset "a rename that fails keeps the new file and names it; an interrupt removes it" begin
+            # On the lab's network share a rename over a file another program has open fails, and
+            # the share deletes the old file when that program closes it: the new file, complete,
+            # may then be the only copy of the data, so it stays, named in the error
+            now = read(joinpath(dir, "r.mat"))
+            s = Dict{String,Any}("X" => [1.0])
+            refused(src, dst) = error("rename refused")
+            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; rename=refused); nothing catch ex; ex end
+            @test err isa ErrorException && occursin("rename refused", err.msg) &&
+                  occursin("could not be renamed over", err.msg) && occursin("saved in full in", err.msg)
+            @test read(joinpath(dir, "r.mat")) == now
+            kept = filter(!=("r.mat"), readdir(dir))
+            @test length(kept) == 1 && startswith(only(kept), "jl_") && occursin(only(kept), err.msg)
+            @test matread(joinpath(dir, only(kept)))["SMD"]["X"] == 1.0
+            rm(joinpath(dir, only(kept)))
+            # An interrupt leaves the old file, and the new file goes
+            interrupted(src, dst) = throw(InterruptException())
+            @test_throws InterruptException SMLMio._write_smd(joinpath(dir, "r.mat"), s; rename=interrupted)
+            @test read(joinpath(dir, "r.mat")) == now
             @test readdir(dir) == ["r.mat"]
-            @test isempty(ours())
         end
 
-        @testset "a file held open by HDF5 is refused and left as it was" begin
-            # A read-only handle: closing a read-write one updates the file's HDF5 header itself
-            now = read(joinpath(dir, "r.mat"))
-            io = matopen(joinpath(dir, "r.mat"), "r")
-            try
-                @test_throws Exception save_smite(good, dir, "r.mat")
-            finally
-                close(io)
+        @testset "the new file is created exclusively, beside the target, as any new file there" begin
+            names = fill("", 64)
+            Threads.@threads for i in eachindex(names)
+                names[i] = SMLMio._new_beside(joinpath(dir, "r.mat"))
             end
-            @test read(joinpath(dir, "r.mat")) == now
-            @test load_smite_2d(SmiteSMD(dir, "r.mat")).emitters[1].x ≈ 1.0
-            @test isempty(ours())
+            @test allunique(names) && all(isfile, names) && all(n -> dirname(n) == dir, names)
+            @test all(n -> filesize(n) == 0, names)
+            probe = joinpath(dir, "probe"); touch(probe)
+            @test all(n -> filemode(n) & 0o777 == filemode(probe) & 0o777, names)
+            foreach(rm, names); rm(probe)
+            @test readdir(dir) == ["r.mat"]
         end
 
-        @testset "a recreate refused after it changed the file says the file is incomplete" begin
-            # With file locking on, HDF5 truncates a file another program holds locked and then
-            # refuses it (shown outside the suite: HDF5 reads its locking setting when it starts).
-            # A refusal that left the file as it was is passed on as it is; one that changed it is
-            # reported as an incomplete file, whatever the file's length and times then (its first
-            # bytes are compared too); one after which the file cannot be read, as possibly incomplete
-            s = Dict{String,Any}("X" => [1.0])
-            now = read(joinpath(dir, "r.mat"))
-            refused(t) = error("unable to lock file")
-            @test_throws r"^unable to lock file$" SMLMio._write_smd(joinpath(dir, "r.mat"), s; recreate=refused)
-            @test read(joinpath(dir, "r.mat")) == now
-            same_length(t) = (write(t, zeros(UInt8, length(now))); error("unable to lock file"))
-            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; recreate=same_length); nothing catch ex; ex end
-            @test err isa ErrorException && occursin("now incomplete", err.msg) && occursin("unable to lock", err.msg)
-            save_smite(good, dir, "r.mat")
-            gone(t) = (rm(t); error("stale file handle"))
-            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; recreate=gone); nothing catch ex; ex end
-            @test err isa ErrorException && occursin("may be incomplete", err.msg) && occursin("stale file handle", err.msg)
-            @test isempty(ours())
-            save_smite(good, dir, "r.mat")
+        @testset "saves running at once each leave a whole file" begin
+            # Each save writes its own new file and renames it over the target: the target ends as
+            # one save's whole file, and no other file stays
+            smlds = [SmiteSMLD{Float64,Emitter2DFit{Float64}}(
+                         [Emitter2DFit{Float64}(Float64(i), 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)],
+                         cam, 1, 1, Dict{String,Any}()) for i in 1:16]
+            Threads.@threads for i in eachindex(smlds)
+                save_smite(smlds[i], dir, "race.mat")
+            end
+            back = load_smite_2d(SmiteSMD(dir, "race.mat"))
+            @test length(back.emitters) == 1 && back.emitters[1].x in 1.0:16.0
+            @test sort(readdir(dir)) == ["r.mat", "race.mat"]
+            rm(joinpath(dir, "race.mat"))
         end
 
-        @testset "an interrupt while the saver reads a file's state or free space stops the save" begin
-            # Read before the file is recreated: swallowing it would let the save go on and replace
-            # the file the person meant to keep
-            @test_throws InterruptException SMLMio._file_state(InterruptingPath())
-            @test_throws InterruptException SMLMio._check_space(InterruptingPath(), 1)
-            @test SMLMio._file_state(joinpath(dir, "no-such-file.mat")) === nothing
+        @testset "a program reading the old file goes on reading it" begin
+            # The old file is replaced, not rewritten: an open handle keeps the old contents (on
+            # the systems the lab saves to; Windows refuses to replace a file that is open)
+            if !Sys.iswindows()
+                save_smite(mk(Dict{String,Any}("tag" => "old")), dir, "open.mat")
+                io = matopen(joinpath(dir, "open.mat"), "r")
+                try
+                    save_smite(mk(Dict{String,Any}("tag" => "new")), dir, "open.mat")
+                    @test read(io, "SMD")["tag"] == "old"
+                finally
+                    close(io)
+                end
+                @test matread(joinpath(dir, "open.mat"))["SMD"]["tag"] == "new"
+                rm(joinpath(dir, "open.mat"))
+            end
         end
 
-        @testset "a new file is created exclusively; a failure removes only a file the save made" begin
-            # A file that appears at the target while a save is staged is an existing file: it is
-            # rewritten in place and kept if the copy fails, never removed
-            p = joinpath(dir, "excl.mat")
-            f = SMLMio._create_new(p)
-            @test f isa IO && isfile(p) && filesize(p) == 0
-            @test SMLMio._create_new(p) === nothing
-            # The new file is written through the descriptor that created it, as one open: a file
-            # the folder's default permissions make read-only still gets its contents
-            chmod(p, 0o444)
-            SMLMio._copy_into(joinpath(dir, "r.mat"), f)
-            close(f)
-            @test read(p) == read(joinpath(dir, "r.mat"))
-            chmod(p, 0o644); rm(p)
-            @test_throws r"cannot be created" SMLMio._create_new(joinpath(dir, "no-such-folder", "x.mat"))
-            # A failed save leaves a file another program put at the name meanwhile
-            s = Dict{String,Any}("X" => [1.0])
-            q = joinpath(dir, "swapped.mat")
-            swapped(src, dst) = (rm(q); write(q, "another program's file"); error("disk full"))
-            @test_throws r"disk full" SMLMio._write_smd(q, s; copy=swapped)
-            @test read(q, String) == "another program's file"
-            rm(q)
-            @test isempty(ours())
-            # A storage error first reported when the new file is closed (NFS can report a full
-            # disk or quota there) fails the save, and the new file is removed
-            n = joinpath(dir, "closed.mat")
-            full(f) = (close(f); throw(Base.IOError("close: no space left on device (ENOSPC)", Base.UV_ENOSPC)))
-            @test_throws Base.IOError SMLMio._write_smd(n, s; finish=full)
-            @test !ispath(n)
-            # The same when the new file was already closed by the time the copy failed
-            closed(src, dst) = (SMLMio._copy_into(src, dst); close(dst); error("disk full"))
-            @test_throws r"disk full" SMLMio._write_smd(n, s; copy=closed)
-            @test !ispath(n)
-            @test isempty(ours())
-            # Cleanup of a new file whose identity was not taken (the look at it failed): taken
-            # from the file, still open, and the file removed
-            f = SMLMio._create_new(n)
-            @test SMLMio._remove_new(n, f, nothing) === nothing
-            @test !ispath(n) && !isopen(f)
-            # An interrupt during cleanup is passed on once the file is removed, not swallowed
-            # (a caller that went on after the save's own error would save the next file)
-            write(n, "partial")
-            c = InterruptingClose(false)
-            @test_throws InterruptException SMLMio._remove_new(n, c, SMLMio._file_id(n))
-            @test c.closed && !ispath(n)
+        @testset "a folder where no file can be created is refused before writing" begin
+            if !Sys.iswindows() && Libc.geteuid() != 0   # root may create files anywhere
+                sub = mkpath(joinpath(dir, "locked"))
+                save_smite(good, sub, "r.mat")
+                now = read(joinpath(sub, "r.mat"))
+                chmod(sub, 0o555)
+                try
+                    @test_throws r"cannot create a file in .*locked.* to save into" save_smite(good, sub, "r.mat")
+                    @test read(joinpath(sub, "r.mat")) == now && readdir(sub) == ["r.mat"]
+                finally
+                    chmod(sub, 0o755)
+                end
+                rm(sub; recursive=true)
+            end
         end
 
         @testset "metadata of a narrower value type" begin
@@ -576,48 +520,10 @@ end
             md = SMLMio._smite_metadata(Dict{String,String}("PixelSize" => "", "Comment" => "x"))
             @test md["PixelSize"] == zeros(0, 0) && md["Comment"] == "x"
         end
-
-        @testset "too little free space is refused before the file is touched" begin
-            now = read(joinpath(dir, "r.mat"))
-            @test_throws r"more bytes" SMLMio._check_space(joinpath(dir, "r.mat"), typemax(Int))
-            @test read(joinpath(dir, "r.mat")) == now
-        end
-
-        @testset "a final copy that fails: a new file is removed, no temporary file stays" begin
-            failing(src, dst) = (write(dst, "partial"); error("disk full"))
-            s = Dict{String,Any}("X" => [1.0])
-            @test_throws r"disk full" SMLMio._write_smd(joinpath(dir, "new2.mat"), s; copy=failing)
-            @test !ispath(joinpath(dir, "new2.mat"))
-            @test isempty(ours())
-            # An existing file is then partly written, as documented, and the error says so; the
-            # temporary file goes
-            err = try SMLMio._write_smd(joinpath(dir, "r.mat"), s; copy=failing); nothing catch ex; ex end
-            @test err isa ErrorException
-            @test occursin("incomplete", err.msg) && occursin("save again", err.msg) &&
-                  occursin("disk full", err.msg)
-            @test read(joinpath(dir, "r.mat"), String) == "partial"
-            @test isempty(ours())
-            # An interrupt is passed on as it is, after a warning that says the same
-            interrupted(src, dst) = (write(dst, "partial"); throw(InterruptException()))
-            @test_logs (:warn, r"incomplete.*save again.*interrupted") @test_throws InterruptException SMLMio._write_smd(
-                joinpath(dir, "r.mat"), s; copy=interrupted)
-            @test isempty(ours())
-        end
-
-        @testset "a write that takes fewer bytes than it was given is an error" begin
-            # As a file under a size limit does, without throwing: the copy loop checks every write
-            data = rand(UInt8, 3 << 20)
-            @test_throws r"took 65536 of 1048576 bytes" SMLMio._copy_stream(IOBuffer(data), CappedIO(IOBuffer(), 65536))
-            whole = CappedIO(IOBuffer(), length(data))
-            SMLMio._copy_stream(IOBuffer(data), whole)
-            @test take!(whole.buf) == data
-        end
     end
-    end
-    rm(private; recursive=true)
 end
 
-@testset "save_smite never removes a folder, and replaces a file as a write would" begin
+@testset "save_smite never removes a folder, and replaces a file with a new one" begin
     cam = IdealCamera(1:64, 1:64, 0.1)
     mk(x) = SmiteSMLD{Float64,Emitter2DFit{Float64}}(
         [Emitter2DFit{Float64}(x, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)], cam, 1, 1, Dict{String,Any}())
@@ -645,16 +551,18 @@ end
         save_smite(mk(3.0), dir, joinpath(dir, "abs.mat"))
         @test xof(dir, "abs.mat") ≈ 3.0
 
-        # An existing file is rewritten in place, as a direct write would: it keeps its
-        # permissions and its hard links, and a file the system will not let us write is refused
-        # and unchanged (POSIX permissions; CI runs on Linux)
+        # An existing file is replaced by a new file: it gets the mode any new file in the folder
+        # gets, a hard link to the old file keeps the old contents, and a file the system will not
+        # let us write is refused and unchanged (POSIX permissions; CI runs on Linux)
         if !Sys.iswindows()
             f = joinpath(dir, "mode.mat")
-            save_smite(mk(1.0), dir, "mode.mat"); chmod(f, 0o640)
+            probe = joinpath(dir, "probe"); touch(probe)
+            save_smite(mk(1.0), dir, "mode.mat"); chmod(f, 0o604)
             hardlink(f, joinpath(dir, "hard.mat"))
             save_smite(mk(4.0), dir, "mode.mat")
-            @test filemode(f) & 0o777 == 0o640 && xof(dir, "mode.mat") ≈ 4.0
-            @test xof(dir, "hard.mat") ≈ 4.0   # the same file, not a replaced one
+            @test filemode(f) & 0o777 == filemode(probe) & 0o777 && xof(dir, "mode.mat") ≈ 4.0
+            @test xof(dir, "hard.mat") ≈ 1.0   # the old file, which the name no longer holds
+            rm(probe)
             chmod(f, 0o440)
             if Libc.geteuid() != 0   # root may write any file
                 @test_throws r"cannot be written" save_smite(mk(5.0), dir, "mode.mat")
@@ -662,8 +570,8 @@ end
             end
             chmod(f, 0o640)
 
-            # A symlink is followed: the linked file is rewritten and the link stays a link; a
-            # symlink to a folder is a folder
+            # A symlink is followed: the linked file is replaced and the link stays a link to it;
+            # a symlink to a folder is a folder
             save_smite(mk(1.0), dir, "real.mat")
             symlink(joinpath(dir, "real.mat"), joinpath(dir, "link.mat"))
             save_smite(mk(6.0), dir, "link.mat")

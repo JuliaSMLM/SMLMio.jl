@@ -13,6 +13,19 @@ Changed:
   and doubles, as SMITE's fits give them. 0.1.0 wrote integer and complex emitter values (MAT
   refused `Float16` and `BigFloat` ones), and saved 3D data whose `z` was not `Float32` or
   `Float64` (`missing`, `Float16`) without `Z`, with a warning; each is now an error.
+- `save_smite` writes the new file in full beside the old one, in the same folder, and renames
+  it over the old one, so the name holds the old file or the whole new one. 0.1.0 wrote a
+  temporary file and copied it into the existing file in place, so an error during the copy (a
+  full disk, a file size limit, a lost share, an interruption) left the file partly written, a
+  write cut short without an error reported success, saves running at once could share one
+  temporary file (named from the process id and the clock), and with HDF5 file locking on,
+  replacing a file another program had open emptied it. Now a failed save leaves the old file
+  as it was, a program reading the old file goes on reading it, and saves running at once each
+  write a whole file. The saved file is a new file: it is owned by whoever saves and has the
+  folder's usual mode for a new file (0.1.0 kept the old file's owner, mode and hard links), and
+  a save needs permission to create a file in the folder. A rename that fails keeps the new file,
+  complete, and the error names it: on the lab's network share (CIFS), a file another program
+  has open cannot be replaced, and the share deletes the old file when that program closes it.
 
 Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 
@@ -81,32 +94,6 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
   holding an unfilled cell element still cannot be saved.
 - `load_smite_2d` warned that it leaves `Z` out only for a file marked `NDims` 3, but SMITE marks
   its own 3D fits `NDims` 2; it now warns when `Z` and `Z_SE` hold one number per localization.
-- `save_smite` named its temporary file from the process id and the clock, so saves running at
-  once on several threads, or in processes that share the temporary folder and a process id
-  (containers), could share one: a save could fail, or return normally having written a file
-  that does not load or holds another save's data, and an existing target could lose its
-  contents. Each save now writes in a new folder of its own (`mktempdir`).
-  An interrupt during the final copy into an existing file is now passed on after a warning that
-  the file is incomplete, as other errors there say. The guide says that HDF5.jl before 0.16.13
-  does not lock its calls, so with those versions the caller must use MAT and HDF5 (loads and
-  saves alike) from one thread at a time.
-- `save_smite` asks HDF5 to recreate an existing file before copying the new one in. With HDF5
-  file locking on, HDF5 truncates a file before it finds another program's lock on it, so
-  replacing a file another program had open left it empty with only HDF5's lock error. The file
-  is still emptied (a limit, as in 0.1.0: `save_smite` does not coordinate with other programs
-  using the file, and the guide lists what that means), but a refusal that changed the file (its
-  size, times or first bytes), or after which that cannot be established, now says the file is
-  (or may be) incomplete. A new file is created exclusively after the save is staged and written
-  through the open that created it, so a file that appeared at the name meanwhile is treated as
-  an existing one, and a failed save removes a file only while the name is still the one it
-  created.
-- `save_smite` failed on metadata whose value type is narrower than `Any` (a
-  `Dict{String,String}` with an empty `PixelSize`, from a custom SMLD type) while making SMITE's
-  empty text an empty array; it reads a copy that takes any value.
-- The final copy ignored how many bytes each write took, so a write cut short without an error
-  (a file size limit) reported success and left a file that does not load. Each write must take
-  all its bytes and the file must end up as long as the copy; otherwise the error says the file
-  is incomplete.
 
 ## 0.1.0 (2026-11-16)
 

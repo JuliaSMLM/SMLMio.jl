@@ -25,11 +25,12 @@ Which fields are written, which are dropped and what a load gives back are on th
 - `nothing`.
 
 # Notes
-- The file is written in full to a temporary file before the target is touched, so a save that
-  fails while writing leaves an existing file as it was; only an error once the file is being
-  rewritten (a full disk, a file size limit, a lost share) can leave it partly written, and the
-  error then says so. It does not coordinate with other programs using the same file. What it
-  refuses, and how a file is rewritten, are on the [SMITE files](@ref) page.
+- The file is written in full to a new file in the same folder and then renamed over the
+  target, so the name holds the old file or the whole new one: a save that fails leaves an
+  existing file as it was, except that a rename that fails keeps the new file and names it in
+  the error (on a network share, a file another program has open cannot be replaced). The saved
+  file is a new file (owned by whoever saves, with the folder's usual mode for a new file). What
+  it refuses, and how a file is replaced, are on the [SMITE files](@ref) page.
 
 - `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
   load as 0.
@@ -248,19 +249,20 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         "localization; list a field there, with one value per file row, to save it by row")
     ndims3_from_md && (s["NDims"] = 3.0)
     
-    # MAT truncates the target before it checks a struct's keys. Check them all first; an
-    # existing file is rewritten only once the new contents are complete.
+    # Every key is checked first, so one error names them all
     _check_mat_keys(s)
     _write_smd(joinpath(String(filepath), String(filename)), s)
     return nothing
 end
 
-# The whole file is written to a temporary file first (in a folder of its own, _staging_dir) and
-# copied into place only when complete,
-# in place so that an existing file keeps its owner, group, permissions and links; the guide's
-# SMITE files page states the rules. `copy`, `recreate` and `finish` (closing a new file) are seams
-# for tests.
-function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate, finish=close)
+# The file is written in full to a new file beside the target and then renamed over it, so the
+# name holds the old file or the whole new one, never a partial one, and a program that has the
+# old file open goes on reading the old contents (local disks and NFS; the CIFS share refuses the
+# rename, below). The new file is created as any new file in
+# that folder is (owned by whoever saves, with the mode the folder's defaults give); a symbolic
+# link keeps pointing at the saved file. The guide's SMITE files page states the rules.
+# `rename` is a seam for tests.
+function _write_smd(target::String, s; rename=Base.Filesystem.rename)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
         throw(ArgumentError("save_smite: $(repr(target)) names no file"))
@@ -272,170 +274,66 @@ function _write_smd(target::String, s; copy=_copy_into, recreate=_recreate, fini
         throw(ArgumentError("save_smite: $(repr(target)) is a symlink to nothing"))
     ispath(target) && !isfile(target) &&
         throw(ArgumentError("save_smite: $(repr(target)) is not a regular file"))
-    existed = isfile(target)
-    if existed
+    path = islink(target) ? realpath(target) : target
+    # An existing file you may not write is refused, as a write would be: the rename needs only
+    # the folder's permission, and would replace a file someone made read-only
+    if isfile(path)
         try
-            close(open(target, "r+"))
+            close(open(path, "r+"))
         catch e
             e isa SystemError || rethrow()
             throw(ArgumentError("save_smite: $(repr(target)) cannot be written: " *
                                 Libc.strerror(e.errnum)))
         end
     end
-    stage = _staging_dir()
-    tmp = joinpath(stage, "SMD.mat")
+    tmp = _new_beside(path)
     try
         matwrite(tmp, Dict("SMD" => s))
-        # A new file is created here, exclusively, and written through the descriptor that created
-        # it (as one open, so a folder whose default permissions make new files read-only still
-        # gets the file); one that appeared at the name while the save was staged is an existing file
-        created = existed ? nothing : _create_new(target)
-        made = nothing
-        if created === nothing
-            _check_space(target, filesize(tmp) - filesize(target))
-            # HDF5 refuses to recreate a file this session holds open, before it truncates it. With
-            # file locking on, it truncates a file another program holds locked and then refuses
-            # it: a refusal that changed the file, or whose effect cannot be established, is
-            # reported as an incomplete file
-            before = _file_state(target)
-            try
-                recreate(target)
-            catch e
-                after = try
-                    _file_state(target)
-                catch ie   # an interrupt: whether the file was changed is not known
-                    _incomplete(target, ie; certain=false)
-                end
-                before === nothing || after === nothing ? _incomplete(target, e; certain=false) :
-                    isequal(after, before) ? rethrow() : _incomplete(target, e)
-            end
-        end
-        try
-            # Which file the save created, taken while it is open (a closed file cannot be stat'ed)
-            created === nothing || (made = _file_id(created))
-            copy(tmp, created === nothing ? target : created)
-            # A new file is closed as part of the save: a storage error first reported at close
-            # (NFS can report a full disk or quota there) fails it as a failed write does
-            created === nothing || finish(created)
-        catch e
-            created === nothing && _incomplete(target, e)
-            _remove_new(target, created, made)
+    catch
+        rm(tmp; force=true)
+        rethrow()
+    end
+    # A rename that fails keeps the new file, complete, and names it: on the lab's network share
+    # (CIFS), renaming over a file another program has open fails, and the share deletes the old
+    # file once that program closes it, so the new file may then be the only copy of the data. An
+    # interrupt (before the rename, or after it) leaves the old file or the new one at the name.
+    try
+        rename(tmp, path)
+    catch e
+        if e isa InterruptException
+            rm(tmp; force=true)
             rethrow()
         end
-    finally
-        rm(stage; recursive=true, force=true)
+        error("save_smite: the new file could not be renamed over $(repr(target)): " *
+              "$(sprint(showerror, e)). The data are saved in full in $(repr(tmp)); rename it to " *
+              "$(repr(basename(path))) once the cause is fixed. On a network share a file another " *
+              "program has open cannot be replaced, and the share can delete the old file when " *
+              "that program closes it.")
     end
     return nothing
 end
 
-_recreate(target) = close(matopen(target, "w"))
-# What says whether a file was changed: its size, times and first 4 KiB (HDF5's superblock, after
-# MATLAB's 512-byte header); nothing when that cannot be read. An interrupt is passed on (in the
-# read before the recreate, the save stops with the file untouched).
-function _file_state(path)
-    try
-        st = stat(path)
-        head = open(io -> read(io, 4096), path, "r")
-        return (st.size, st.mtime, st.ctime, head)
-    catch e
-        e isa InterruptException && rethrow()
-        return nothing
-    end
-end
-# Which file a path or an open file is (device and inode), taken while it is open
-_file_id(x) = (st = stat(x); (st.device, st.inode))
-
-# Closes and removes a new file the save created and could not finish, when the name still holds
-# that file (`made`, its identity; when that was not taken, it is taken from the file if it is still
-# open). Each step runs whatever happens in the others; an interrupt in any of them is passed on
-# once all are done, other errors give way to the save's own.
-function _remove_new(target, created, made)
-    pending = nothing
-    step(f) = try
-        f()
-    catch e
-        e isa InterruptException && (pending = e)
-        nothing
-    end
-    id = made === nothing && isopen(created) ? step(() -> _file_id(created)) : made
-    step(() -> close(created))
-    id === nothing || step(() -> _file_id(target) == id && rm(target; force=true))
-    pending === nothing || throw(pending)
-    return nothing
-end
-
-# Creates `path` empty, only if nothing is there (O_EXCL), and returns it open for writing;
-# nothing when a file is already there. Any other failure is an ArgumentError naming the file.
-function _create_new(path)
+# A new, empty file in `path`'s folder under a name no other file has, created exclusively (so
+# no other save can take the same name) with the mode any new file there gets: the system applies
+# the user's umask and the folder's default permissions. It is closed; its name is returned.
+function _new_beside(path)
+    dir = dirname(path)
+    isempty(dir) && (dir = ".")
     F = Base.Filesystem
-    try
-        return F.open(path, F.JL_O_WRONLY | F.JL_O_CREAT | F.JL_O_EXCL, 0o666)
-    catch e
-        e isa Base.IOError && e.code == Base.UV_EEXIST && return nothing
-        e isa Base.IOError || rethrow()
-        throw(ArgumentError("save_smite: $(repr(path)) cannot be created: $(sprint(showerror, e))"))
+    for _ in 1:100
+        tmp = tempname(dir; cleanup=false)
+        f = try
+            F.open(tmp, F.JL_O_WRONLY | F.JL_O_CREAT | F.JL_O_EXCL, 0o666)
+        catch e
+            e isa Base.IOError && e.code == Base.UV_EEXIST && continue
+            e isa Base.IOError || rethrow()
+            throw(ArgumentError("save_smite: cannot create a file in $(repr(dir)) to save into: " *
+                                sprint(showerror, e)))
+        end
+        close(f)
+        return tmp
     end
-end
-
-# An existing file was truncated and not rewritten in full (or, `certain` false, whether it was
-# changed cannot be established): say so, and that the data can be saved again (an interrupt in a
-# warning, and passed on as it is)
-function _incomplete(target, e; certain=true)
-    msg = (certain ? "save_smite: writing $(repr(target)) failed partway, so that file is now " *
-                     "incomplete and its old contents are gone." :
-                     "save_smite: writing $(repr(target)) failed, and whether that file was changed " *
-                     "cannot be established, so it may be incomplete.") *
-          " The data are unchanged in memory: save again once the cause is fixed."
-    e isa InterruptException && (@warn("$msg The save was interrupted."); rethrow())
-    error("$msg The error was: $(sprint(showerror, e))")
-end
-
-# A folder of this save's own in the system's temporary folder, created with a name no other save
-# uses, of this process or another: saves on several threads, or processes that share the
-# folder and a process id (containers), each get their own (mkdtemp makes a new folder, never
-# an existing one).
-_staging_dir() = mktempdir(tempdir(); prefix=string("smlmio-", getpid(), "-"), cleanup=false)
-
-# Copies the file `src` into `dst` in place (truncating it), or into a new file open for writing
-# (`dst` an IO, from _create_new). A write can take fewer bytes than it was given without an error
-# (a file size limit): each write must take them all, and the file must end up as long as `src` (a
-# short write when the last bytes are flushed included).
-function _copy_into(src, dst::AbstractString)
-    open(to -> _copy_from(src, to), dst, "w")
-    _check_length(filesize(dst), filesize(src), dst)
-end
-function _copy_into(src, dst::IO)
-    _copy_from(src, dst)
-    _check_length(stat(dst).size, filesize(src), "the new file")
-end
-_copy_from(src, to) = (open(from -> _copy_stream(from, to), src, "r"); flush(to))
-_check_length(a, b, what) = a == b ? nothing : error("$(what isa AbstractString ? repr(what) : what) holds $a of the $b bytes written")
-function _copy_stream(from::IO, to::IO)
-    buf = Vector{UInt8}(undef, 1 << 20)
-    while !eof(from)
-        n = readbytes!(from, buf)
-        w = write(to, view(buf, 1:n))
-        w == n || error("a write took $w of $n bytes (a full disk or a file size limit)")
-    end
-    return nothing
-end
-
-# Refuses before an existing file is truncated when its folder lacks the extra bytes the new
-# contents need (a quota can still stop the write). Skipped where the system cannot say,
-# including a file system that reports no size at all. An interrupt is passed on.
-function _check_space(target, extra)
-    extra > 0 || return nothing
-    st = try
-        diskstat(dirname(realpath(target)))
-    catch e
-        e isa InterruptException && rethrow()
-        return nothing
-    end
-    st.total == 0 && return nothing
-    free = st.available
-    free >= extra || throw(ArgumentError("save_smite: $(repr(target)) needs $extra more bytes " *
-                                         "than its folder has free ($free)"))
-    return nothing
+    error("save_smite: found no unused file name in $(repr(dir))")
 end
 
 # MATLAB's names: an ASCII letter, then up to 62 letters, digits or underscores.
