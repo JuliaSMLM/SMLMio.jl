@@ -480,6 +480,17 @@ end
                 rm(sub; recursive=true)
             end
             @test readdir(dir) == ["r.mat"]
+            # An interrupt while the kept file is looked for, after a rename error, is passed on
+            # after the same warning, never turned into an ordinary error
+            interrupted_lookup(p) = throw(InterruptException())
+            @test_logs (:warn, r"interrupted; .*whether the save completed is not known; check .*r.mat") @test_throws(
+                InterruptException, SMLMio._write_smd(joinpath(dir, "r.mat"), s; rename=refused, lookup=interrupted_lookup))
+            @test read(joinpath(dir, "r.mat")) == now
+            foreach(f -> rm(joinpath(dir, f)), filter(startswith("jl_"), readdir(dir)))
+            # Cleanup after an error: its own error gives way, an interrupt is passed on
+            @test SMLMio._best_effort(() -> error("input/output error")) === nothing
+            @test_throws InterruptException SMLMio._best_effort(() -> throw(InterruptException()))
+            @test readdir(dir) == ["r.mat"]
             # The rename is the one system call: a failure is the system's error, and nothing is
             # copied (Base.Filesystem.rename on Julia 1.10 and 1.11 copies on failure)
             src = joinpath(dir, "src.tmp"); write(src, "x")

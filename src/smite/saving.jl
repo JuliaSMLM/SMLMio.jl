@@ -269,8 +269,8 @@ end
 # rename, below). The new file is created as any new file in
 # that folder is (owned by whoever saves, with the mode the folder's defaults give); a symbolic
 # link keeps pointing at the saved file. The guide's SMITE files page states the rules.
-# `rename` is a seam for tests.
-function _write_smd(target::String, s; rename=_rename)
+# `rename` and `lookup` are seams for tests.
+function _write_smd(target::String, s; rename=_rename, lookup=ispath)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
         throw(ArgumentError("save_smite: $(repr(target)) names no file"))
@@ -299,10 +299,7 @@ function _write_smd(target::String, s; rename=_rename)
         matwrite(tmp, Dict("SMD" => s))
         mode === nothing || chmod(tmp, mode)
     catch
-        try
-            rm(tmp; force=true)
-        catch   # a lost share: the write's own error is the one to see
-        end
+        _best_effort(() -> rm(tmp; force=true))
         rethrow()
     end
     # A rename that fails keeps the new file, complete, and names it: on the lab's network share
@@ -315,9 +312,11 @@ function _write_smd(target::String, s; rename=_rename)
     try
         rename(tmp, path)
     catch e
+        interrupted = e isa InterruptException
         kept = try
-            ispath(tmp)
-        catch
+            lookup(tmp)
+        catch le
+            le isa InterruptException && (interrupted = true)
             nothing
         end
         msg = if kept === true
@@ -332,7 +331,7 @@ function _write_smd(target::String, s; rename=_rename)
                 "the folder cannot be read, so whether the save completed is not known") *
             "; check $(repr(target))."
         end
-        e isa InterruptException && (@warn("save_smite: interrupted; $msg"); rethrow())
+        interrupted && (@warn("save_smite: interrupted; $msg"); throw(InterruptException()))
         error("save_smite: $msg")
     end
     return nothing
@@ -372,14 +371,22 @@ function _new_beside(path)
             chmod(tmp, m | 0o600)
             return tmp, m
         catch
-            try
-                rm(tmp; force=true)
-            catch   # a lost share: the first error is the one to see
-            end
+            _best_effort(() -> rm(tmp; force=true))
             rethrow()
         end
     end
     error("save_smite: found no unused file name in $(repr(dir))")
+end
+
+# Cleanup inside a catch: an error of its own (a lost share) gives way to the error being handled,
+# and an interrupt during it is passed on in its place, never swallowed.
+function _best_effort(f)
+    try
+        f()
+    catch e
+        e isa InterruptException && rethrow()
+    end
+    return nothing
 end
 
 # MATLAB's names: an ASCII letter, then up to 62 letters, digits or underscores.
