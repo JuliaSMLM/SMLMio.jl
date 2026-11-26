@@ -28,11 +28,13 @@ Which fields are written, which are dropped and what a load gives back are on th
 
 # Notes
 - The file is written in full to a new file in the same folder and then renamed over the
-  target, so the name holds the old file or the whole new one: a save that fails leaves an
-  existing file as it was, except that a rename that fails keeps the new file and names it in
-  the error (on a network share, a file another program has open cannot be replaced). The saved
-  file is a new file (owned by whoever saves, with the folder's usual mode for a new file). What
-  it refuses, and how a file is replaced, are on the [SMITE files](@ref) page.
+  target, so the name holds the old file or the whole new one, and a save that fails while
+  writing leaves an existing file as it was. A rename that fails, or is interrupted, keeps the
+  new file and names it; on the lab's network share (CIFS) a file another program has open
+  cannot be replaced, and the share then deletes the old file, so the name can hold neither
+  file and the kept new file holds the data. The saved file is a new file (owned by whoever
+  saves, with the folder's usual mode for a new file). What it refuses, and how a file is
+  replaced, are on the [SMITE files](@ref) page.
 
 - `σ_xy`, and in 3D `σ_xz` and `σ_yz`, are not saved: SMITE has no covariance fields, and they
   load as 0.
@@ -268,7 +270,7 @@ end
 # that folder is (owned by whoever saves, with the mode the folder's defaults give); a symbolic
 # link keeps pointing at the saved file. The guide's SMITE files page states the rules.
 # `rename` is a seam for tests.
-function _write_smd(target::String, s; rename=Base.Filesystem.rename)
+function _write_smd(target::String, s; rename=_rename)
     dir, base = splitdir(target)
     (isempty(base) || base in (".", "..")) &&
         throw(ArgumentError("save_smite: $(repr(target)) names no file"))
@@ -292,36 +294,58 @@ function _write_smd(target::String, s; rename=Base.Filesystem.rename)
                                 Libc.strerror(e.errnum)))
         end
     end
-    tmp = _new_beside(path)
+    tmp, mode = _new_beside(path)
     try
         matwrite(tmp, Dict("SMD" => s))
+        mode === nothing || chmod(tmp, mode)
     catch
-        rm(tmp; force=true)
+        try
+            rm(tmp; force=true)
+        catch   # a lost share: the write's own error is the one to see
+        end
         rethrow()
     end
     # A rename that fails keeps the new file, complete, and names it: on the lab's network share
-    # (CIFS), renaming over a file another program has open fails, and the share deletes the old
-    # file once that program closes it, so the new file may then be the only copy of the data. An
-    # interrupt (before the rename, or after it) leaves the old file or the new one at the name.
+    # (CIFS), a refused replace (another program has the file open, for one) makes the share delete
+    # the old file, at once or when that program closes it, so the new file may then be the only
+    # copy of the data. So does an interrupt. A new file no longer beside the target means the
+    # rename may have completed (NFS can report an error for a rename it carried out), or that the
+    # folder cannot be read.
     try
         rename(tmp, path)
     catch e
+        if !ispath(tmp)
+            e isa InterruptException && rethrow()
+            error("save_smite: renaming the new file over $(repr(target)) reported " *
+                  "$(sprint(showerror, e)), and the new file is no longer beside it, so the save may " *
+                  "have completed or the folder cannot be read; check $(repr(target)).")
+        end
         if e isa InterruptException
-            rm(tmp; force=true)
+            @warn("save_smite: interrupted before the new file was renamed over $(repr(target)); the " *
+                  "data are saved in full in $(repr(tmp)).")
             rethrow()
         end
         error("save_smite: the new file could not be renamed over $(repr(target)): " *
               "$(sprint(showerror, e)). The data are saved in full in $(repr(tmp)); rename it to " *
               "$(repr(basename(path))) once the cause is fixed. On a network share a file another " *
-              "program has open cannot be replaced, and the share can delete the old file when " *
-              "that program closes it.")
+              "program has open cannot be replaced, and the share can delete the old file.")
     end
+    return nothing
+end
+
+# A rename as the one system call. Base.Filesystem.rename on Julia 1.10 and 1.11 copies the file
+# and removes the source when the call fails, which could put a partial file at the name.
+function _rename(src, dst)
+    err = ccall(:jl_fs_rename, Int32, (Cstring, Cstring), src, dst)
+    err < 0 && Base.uv_error("rename($(repr(src)), $(repr(dst)))", err)
     return nothing
 end
 
 # A new, empty file in `path`'s folder under a name no other file has, created exclusively (so
 # no other save can take the same name) with the mode any new file there gets: the system applies
-# the user's umask and the folder's default permissions. It is closed; its name is returned.
+# the user's umask and the folder's default permissions. It is closed. Returns its name, and the
+# mode to give it back once written when that mode does not let its owner write it (a folder
+# whose default permissions make new files read-only): it is made writable meanwhile.
 function _new_beside(path)
     dir = dirname(path)
     isempty(dir) && (dir = ".")
@@ -336,8 +360,16 @@ function _new_beside(path)
             throw(ArgumentError("save_smite: cannot create a file in $(repr(dir)) to save into: " *
                                 sprint(showerror, e)))
         end
-        close(f)
-        return tmp
+        try
+            close(f)
+            m = filemode(tmp) & 0o7777
+            m & 0o200 != 0 && return tmp, nothing
+            chmod(tmp, m | 0o200)
+            return tmp, m
+        catch
+            rm(tmp; force=true)
+            rethrow()
+        end
     end
     error("save_smite: found no unused file name in $(repr(dir))")
 end

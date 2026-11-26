@@ -431,7 +431,7 @@ end
             @test readdir(dir) == ["r.mat"]
         end
 
-        @testset "a rename that fails keeps the new file and names it; an interrupt removes it" begin
+        @testset "a rename that fails or is interrupted keeps the new file and names it" begin
             # On the lab's network share a rename over a file another program has open fails, and
             # the share deletes the old file when that program closes it: the new file, complete,
             # may then be the only copy of the data, so it stays, named in the error
@@ -446,17 +446,38 @@ end
             @test length(kept) == 1 && startswith(only(kept), "jl_") && occursin(only(kept), err.msg)
             @test matread(joinpath(dir, only(kept)))["SMD"]["X"] == 1.0
             rm(joinpath(dir, only(kept)))
-            # An interrupt leaves the old file, and the new file goes
+            # An interrupt is passed on after a warning naming the kept file (on the share the old
+            # file can be gone by then)
             interrupted(src, dst) = throw(InterruptException())
-            @test_throws InterruptException SMLMio._write_smd(joinpath(dir, "r.mat"), s; rename=interrupted)
+            @test_logs (:warn, r"interrupted before the new file was renamed.*saved in full in") @test_throws(
+                InterruptException, SMLMio._write_smd(joinpath(dir, "r.mat"), s; rename=interrupted))
             @test read(joinpath(dir, "r.mat")) == now
+            kept = filter(!=("r.mat"), readdir(dir))
+            @test length(kept) == 1 && startswith(only(kept), "jl_")
+            rm(joinpath(dir, only(kept)))
+            # A rename that reports an error but has moved the new file (NFS can) says the save may
+            # have completed, and names the target to check
+            done_then_error(src, dst) = (SMLMio._rename(src, dst); error("stale file handle"))
+            save_smite(good, dir, "nfs.mat")
+            err = try SMLMio._write_smd(joinpath(dir, "nfs.mat"), s; rename=done_then_error); nothing catch ex; ex end
+            @test err isa ErrorException && occursin("may have completed", err.msg) && occursin("nfs.mat", err.msg)
+            @test matread(joinpath(dir, "nfs.mat"))["SMD"]["X"] == 1.0
+            rm(joinpath(dir, "nfs.mat"))
+            @test readdir(dir) == ["r.mat"]
+            # The rename is the one system call: a failure is the system's error, and nothing is
+            # copied (Base.Filesystem.rename on Julia 1.10 and 1.11 copies on failure)
+            src = joinpath(dir, "src.tmp"); write(src, "x")
+            @test_throws Base.IOError SMLMio._rename(src, joinpath(dir, "no-such-folder", "r.mat"))
+            @test_throws Base.IOError SMLMio._rename(joinpath(dir, "missing.tmp"), joinpath(dir, "m.mat"))
+            @test read(src, String) == "x" && !ispath(joinpath(dir, "m.mat"))
+            rm(src)
             @test readdir(dir) == ["r.mat"]
         end
 
         @testset "the new file is created exclusively, beside the target, as any new file there" begin
             names = fill("", 64)
             Threads.@threads for i in eachindex(names)
-                names[i] = SMLMio._new_beside(joinpath(dir, "r.mat"))
+                names[i] = first(SMLMio._new_beside(joinpath(dir, "r.mat")))
             end
             @test allunique(names) && all(isfile, names) && all(n -> dirname(n) == dir, names)
             @test all(n -> filesize(n) == 0, names)
@@ -468,17 +489,22 @@ end
 
         @testset "saves running at once each leave a whole file" begin
             # Each save writes its own new file and renames it over the target: the target ends as
-            # one save's whole file, and no other file stays
-            smlds = [SmiteSMLD{Float64,Emitter2DFit{Float64}}(
-                         [Emitter2DFit{Float64}(Float64(i), 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)],
-                         cam, 1, 1, Dict{String,Any}()) for i in 1:16]
-            Threads.@threads for i in eachindex(smlds)
-                save_smite(smlds[i], dir, "race.mat")
+            # one save's whole file, and no other file stays. Saves on several threads need
+            # HDF5.jl 0.16.13 or later, which locks its calls into the HDF5 library (the guide says
+            # so); earlier versions crash.
+            hdf5 = Base.root_module(Base.PkgId(Base.UUID("f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"), "HDF5"))
+            if pkgversion(hdf5) >= v"0.16.13"
+                smlds = [SmiteSMLD{Float64,Emitter2DFit{Float64}}(
+                             [Emitter2DFit{Float64}(Float64(i), 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)],
+                             cam, 1, 1, Dict{String,Any}()) for i in 1:16]
+                Threads.@threads for i in eachindex(smlds)
+                    save_smite(smlds[i], dir, "race.mat")
+                end
+                back = load_smite_2d(SmiteSMD(dir, "race.mat"))
+                @test length(back.emitters) == 1 && back.emitters[1].x in 1.0:16.0
+                @test sort(readdir(dir)) == ["r.mat", "race.mat"]
+                rm(joinpath(dir, "race.mat"))
             end
-            back = load_smite_2d(SmiteSMD(dir, "race.mat"))
-            @test length(back.emitters) == 1 && back.emitters[1].x in 1.0:16.0
-            @test sort(readdir(dir)) == ["r.mat", "race.mat"]
-            rm(joinpath(dir, "race.mat"))
         end
 
         @testset "a program reading the old file goes on reading it" begin
@@ -495,6 +521,22 @@ end
                 end
                 @test matread(joinpath(dir, "open.mat"))["SMD"]["tag"] == "new"
                 rm(joinpath(dir, "open.mat"))
+            end
+        end
+
+        @testset "a folder whose new files are read-only still gets the file, read-only" begin
+            # As a default ACL or umask makes new files read-only: the saver owns the new file, so
+            # it makes it writable while it writes and gives it back its mode before the rename
+            if !Sys.iswindows()
+                old = ccall(:umask, UInt32, (UInt32,), 0o222)
+                try
+                    save_smite(good, dir, "ro.mat")
+                finally
+                    ccall(:umask, UInt32, (UInt32,), old)
+                end
+                @test filemode(joinpath(dir, "ro.mat")) & 0o777 == 0o444
+                @test load_smite_2d(SmiteSMD(dir, "ro.mat")).emitters[1].x ≈ 1.0
+                rm(joinpath(dir, "ro.mat"))
             end
         end
 

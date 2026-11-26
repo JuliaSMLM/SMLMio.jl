@@ -23,9 +23,10 @@ Changed:
   as it was, a program reading the old file goes on reading it, and saves running at once each
   write a whole file. The saved file is a new file: it is owned by whoever saves and has the
   folder's usual mode for a new file (0.1.0 kept the old file's owner, mode and hard links), and
-  a save needs permission to create a file in the folder. A rename that fails keeps the new file,
-  complete, and the error names it: on the lab's network share (CIFS), a file another program
-  has open cannot be replaced, and the share deletes the old file when that program closes it.
+  a save needs permission to create a file in the folder and room for the new file beside the
+  old one. A rename that fails, or is interrupted, keeps the new file, complete, and names it: on
+  the lab's network share (CIFS), a file another program has open cannot be replaced, and the
+  share then deletes the old file, so the kept file holds the data.
 
 Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 

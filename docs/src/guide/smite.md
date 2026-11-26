@@ -136,18 +136,25 @@ underscores; Dict values and arrays of Dicts need such string keys) are each an
 The file holds an `SMD` variable in SMITE's layout (MATLAB v7.3), which the loaders read. It
 holds no `SMF`, so SMITE tools that also load an `SMF` need one from the original results file.
 The file is written in full to a new file in the same folder (named like `jl_XXXXXX`, created
-as any new file there is) and then renamed over the target, so the name holds the old file or
-the whole new one, never a partial one. A save that fails (MAT refusing a value, a full disk, a
-lost network share, an interruption) leaves an existing file as it was, removes its new file
-where it can and creates none at the name (a program killed during a save can leave its `jl_`
-file); the data are unchanged in memory, so save again once the cause is fixed. On a local disk
-or NFS, a program that has the old file open goes on reading the old contents. Two saves to the
-same file at once each write a whole file, and the name ends with the one renamed last. A rename
-that fails is the exception: the new file stays, complete, and the error names it, so that you
-can rename it into place. On the lab's network share (CIFS), as kitt mounts it, a file another
-program has open cannot be replaced: the save fails, and the share deletes the old file when
-that program closes it, so the new file named in the error then holds the data. Windows also
-refuses to replace a file another program has open.
+as any new file there is; the folder needs room for it beside the old file) and then renamed over
+the target, so the name holds the old file or the whole new one, never a partial one. A save
+that fails while writing (MAT refusing a value, a full disk, a lost network share) leaves an
+existing file as it was, removes its new file where it can and creates none at the name (a
+program killed during a save can leave its `jl_` file); the data are unchanged in memory, so
+save again once the cause is fixed. On a local disk, or on NFS from the same computer, a program
+that has the old file open goes on reading the old contents. Two saves to the same file at once
+each write a whole file, and the name ends with the one renamed last.
+
+A rename that fails, or is interrupted, keeps the new file, complete, and names it (in the error,
+or in a warning for an interruption), so that you can rename it into place. On the lab's network
+share (CIFS), as kitt mounts it, the share refuses to replace a file another program has open
+(two saves to the same file at once can also refuse each other there), and then deletes the old
+file, at once or when that program closes it: the name can then hold neither file, and the kept
+new file holds the data. Windows also refuses to replace a file another program has open. If a
+rename reports an error but the new file is gone from beside the target (NFS can report an error
+for a rename it carried out), the error says the save may have completed, and names the file to
+check.
+
 HDF5.jl before 0.16.13 does not lock its calls into the HDF5 library, so with those versions
 (MAT allows HDF5.jl 0.14 and later) use MAT and HDF5 from one thread at a time in the whole
 session: loads and saves, SMLMio's and any other.
