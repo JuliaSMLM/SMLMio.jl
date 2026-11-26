@@ -449,7 +449,7 @@ end
             # An interrupt is passed on after a warning naming the kept file (on the share the old
             # file can be gone by then)
             interrupted(src, dst) = throw(InterruptException())
-            @test_logs (:warn, r"interrupted before the new file was renamed.*saved in full in") @test_throws(
+            @test_logs (:warn, r"interrupted; the new file could not be renamed.*saved in full in") @test_throws(
                 InterruptException, SMLMio._write_smd(joinpath(dir, "r.mat"), s; rename=interrupted))
             @test read(joinpath(dir, "r.mat")) == now
             kept = filter(!=("r.mat"), readdir(dir))
@@ -462,7 +462,23 @@ end
             err = try SMLMio._write_smd(joinpath(dir, "nfs.mat"), s; rename=done_then_error); nothing catch ex; ex end
             @test err isa ErrorException && occursin("may have completed", err.msg) && occursin("nfs.mat", err.msg)
             @test matread(joinpath(dir, "nfs.mat"))["SMD"]["X"] == 1.0
+            # An interrupt after the rename moved the file warns the same before it is passed on
+            done_then_interrupt(src, dst) = (SMLMio._rename(src, dst); throw(InterruptException()))
+            @test_logs (:warn, r"interrupted; .*may have completed; check .*nfs.mat") @test_throws(
+                InterruptException, SMLMio._write_smd(joinpath(dir, "nfs.mat"), s; rename=done_then_interrupt))
             rm(joinpath(dir, "nfs.mat"))
+            @test readdir(dir) == ["r.mat"]
+            # A rename error after which the new file cannot be looked for (the folder cannot be
+            # searched) says the outcome is not known and names the target, keeping the rename's error
+            if !Sys.iswindows() && Libc.geteuid() != 0   # root may search any folder
+                sub = mkpath(joinpath(dir, "unsearchable"))
+                hide(src, dst) = (chmod(sub, 0o600); error("input/output error"))
+                err = try SMLMio._write_smd(joinpath(sub, "u.mat"), s; rename=hide); nothing catch ex; ex end
+                chmod(sub, 0o755)
+                @test err isa ErrorException && occursin("input/output error", err.msg) &&
+                      occursin("whether the save completed is not known", err.msg) && occursin("u.mat", err.msg)
+                rm(sub; recursive=true)
+            end
             @test readdir(dir) == ["r.mat"]
             # The rename is the one system call: a failure is the system's error, and nothing is
             # copied (Base.Filesystem.rename on Julia 1.10 and 1.11 copies on failure)
@@ -524,19 +540,23 @@ end
             end
         end
 
-        @testset "a folder whose new files are read-only still gets the file, read-only" begin
-            # As a default ACL or umask makes new files read-only: the saver owns the new file, so
-            # it makes it writable while it writes and gives it back its mode before the rename
+        @testset "a folder whose new files are read-only still gets the file, with that mode" begin
+            # As a default ACL or umask makes new files read-only, or unreadable by their owner: the
+            # saver owns the new file, so it makes it readable and writable while it writes and
+            # gives it back its mode before the rename
             if !Sys.iswindows()
-                old = ccall(:umask, UInt32, (UInt32,), 0o222)
-                try
-                    save_smite(good, dir, "ro.mat")
-                finally
-                    ccall(:umask, UInt32, (UInt32,), old)
+                for (mask, mode) in ((0o222, 0o444), (0o622, 0o044))
+                    old = ccall(:umask, UInt32, (UInt32,), mask)
+                    try
+                        save_smite(good, dir, "ro.mat")
+                    finally
+                        ccall(:umask, UInt32, (UInt32,), old)
+                    end
+                    @test filemode(joinpath(dir, "ro.mat")) & 0o777 == mode
+                    chmod(joinpath(dir, "ro.mat"), 0o644)
+                    @test load_smite_2d(SmiteSMD(dir, "ro.mat")).emitters[1].x ≈ 1.0
+                    rm(joinpath(dir, "ro.mat"))
                 end
-                @test filemode(joinpath(dir, "ro.mat")) & 0o777 == 0o444
-                @test load_smite_2d(SmiteSMD(dir, "ro.mat")).emitters[1].x ≈ 1.0
-                rm(joinpath(dir, "ro.mat"))
             end
         end
 

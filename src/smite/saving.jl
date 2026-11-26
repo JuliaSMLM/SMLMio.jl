@@ -309,26 +309,31 @@ function _write_smd(target::String, s; rename=_rename)
     # (CIFS), a refused replace (another program has the file open, for one) makes the share delete
     # the old file, at once or when that program closes it, so the new file may then be the only
     # copy of the data. So does an interrupt. A new file no longer beside the target means the
-    # rename may have completed (NFS can report an error for a rename it carried out), or that the
-    # folder cannot be read.
+    # rename may have completed (NFS can report an error for a rename it carried out); one that
+    # cannot be looked for (the folder cannot be read) leaves that unknown. Either way the target is
+    # named to check, and an interrupt is passed on after a warning that says the same.
     try
         rename(tmp, path)
     catch e
-        if !ispath(tmp)
-            e isa InterruptException && rethrow()
-            error("save_smite: renaming the new file over $(repr(target)) reported " *
-                  "$(sprint(showerror, e)), and the new file is no longer beside it, so the save may " *
-                  "have completed or the folder cannot be read; check $(repr(target)).")
+        kept = try
+            ispath(tmp)
+        catch
+            nothing
         end
-        if e isa InterruptException
-            @warn("save_smite: interrupted before the new file was renamed over $(repr(target)); the " *
-                  "data are saved in full in $(repr(tmp)).")
-            rethrow()
+        msg = if kept === true
+            "the new file could not be renamed over $(repr(target)): $(sprint(showerror, e)). The " *
+            "data are saved in full in $(repr(tmp)); rename it to $(repr(basename(path))) once the " *
+            "cause is fixed. On the lab's network share (CIFS) a file another program has open " *
+            "cannot be replaced, and the share then deletes the old file."
+        else
+            "renaming the new file $(repr(tmp)) over $(repr(target)) reported " *
+            "$(sprint(showerror, e)), and " * (kept === false ?
+                "the new file is no longer beside it, so the save may have completed" :
+                "the folder cannot be read, so whether the save completed is not known") *
+            "; check $(repr(target))."
         end
-        error("save_smite: the new file could not be renamed over $(repr(target)): " *
-              "$(sprint(showerror, e)). The data are saved in full in $(repr(tmp)); rename it to " *
-              "$(repr(basename(path))) once the cause is fixed. On a network share a file another " *
-              "program has open cannot be replaced, and the share can delete the old file.")
+        e isa InterruptException && (@warn("save_smite: interrupted; $msg"); rethrow())
+        error("save_smite: $msg")
     end
     return nothing
 end
@@ -344,8 +349,8 @@ end
 # A new, empty file in `path`'s folder under a name no other file has, created exclusively (so
 # no other save can take the same name) with the mode any new file there gets: the system applies
 # the user's umask and the folder's default permissions. It is closed. Returns its name, and the
-# mode to give it back once written when that mode does not let its owner write it (a folder
-# whose default permissions make new files read-only): it is made writable meanwhile.
+# mode to give it back once written when that mode does not let its owner read and write it (a
+# folder whose default permissions make new files read-only): it is made so meanwhile.
 function _new_beside(path)
     dir = dirname(path)
     isempty(dir) && (dir = ".")
@@ -363,11 +368,14 @@ function _new_beside(path)
         try
             close(f)
             m = filemode(tmp) & 0o7777
-            m & 0o200 != 0 && return tmp, nothing
-            chmod(tmp, m | 0o200)
+            m & 0o600 == 0o600 && return tmp, nothing
+            chmod(tmp, m | 0o600)
             return tmp, m
         catch
-            rm(tmp; force=true)
+            try
+                rm(tmp; force=true)
+            catch   # a lost share: the first error is the one to see
+            end
             rethrow()
         end
     end
