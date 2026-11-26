@@ -166,8 +166,9 @@ replaced). It contains:
   with). Any other value (an integer, a `Float16`, a `BigFloat`, a rational, a complex number,
   `missing`, text) is an `ArgumentError` naming the field, the emitter, the value and its type,
   and nothing is written. Positions are computed in `Float64` from the written pixel size, then
-  stored as single for `Float32` data; a finite one whose value in pixels is not finite is an
-  `ArgumentError` too.
+  stored as single for `Float32` data; a finite one that would load back infinite, or a
+  non-zero uncertainty that would load back as 0 (values far outside any microscope's range), is
+  an `ArgumentError` too.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
   has properties `z` and `σ_z`, by the same rule. 3D data whose emitters have no `σ_z`, and
   mixed 2D/3D data, save without `Z`, with a warning: an SMD has one `Z` column for all

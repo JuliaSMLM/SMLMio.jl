@@ -14,9 +14,11 @@ Which fields are written, which are dropped and what a load gives back are on th
   `n_frames`, `n_datasets` and `metadata`) whose emitters have `x`, `y`, `photons`, `bg`, `σ_x`,
   `σ_y`, `σ_photons`, `σ_bg`, `frame`, `dataset` and `track_id`, as `Emitter2DFit` and
   `Emitter3DFit` do (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and
-  `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved. Values must be `Float32` or
-  `Float64`; `frame`, `dataset`, `track_id`, `n_frames` and `n_datasets` integers of at most
-  2^53 in size; anything else is an `ArgumentError` naming it.
+  `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved. Emitter values must be
+  `Float32` or `Float64` (metadata `Z` and `Z_SE` written as coordinates may also be complex
+  ones); `frame`, `dataset` and `track_id` integers, and `n_frames` and `n_datasets` integers of
+  at least 0, each of at most 2^53 in size; camera edges `Float32` or `Float64` values or such
+  integers. Anything else is an `ArgumentError` naming it.
 - `filepath::AbstractString`: an existing folder.
 - `filename::AbstractString`: name of the `.mat` file; an existing file of that name is
   rewritten.
@@ -87,8 +89,12 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must be at least " *
         "$(_SMITE_COUNT_MIN["XSize"]) and $(_SMITE_COUNT_MIN["YSize"])"))
     edge_ok(v) = v isa _LAB_REAL ? isfinite(v) : _lab_whole(v)
-    all(edge_ok, ex) && all(edge_ok, ey) || throw(ArgumentError("save_smite: the camera's pixel " *
-        "edges must be finite Float32 or Float64 values, or integers of at most 2^53 in size"))
+    for (axis, edges) in (("x", ex), ("y", ey))
+        bad = findfirst(!edge_ok, edges)
+        bad === nothing || throw(ArgumentError("save_smite: the camera's pixel edge $bad along $axis " *
+            "is $(repr(edges[bad])) ($(typeof(edges[bad]))); SMLMio saves edges that are finite " *
+            "Float32 or Float64 values, or integers of at most 2^53 in size; nothing was written"))
+    end
     fx, fy = Vector{Float64}(ex), Vector{Float64}(ey)
     x0, y0 = fx[1], fy[1]
     px = fx[2] - fx[1]
@@ -192,7 +198,7 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # fits too) or the metadata's NDims is 3. When the emitters' own Z was not saved (lostz),
     # metadata Z and Z_SE are not saved at all.
     loaded = haskey(md, "smite_per_localization_fields")
-    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "value", collect(1:n), n > 0
+    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "emitter", collect(1:n), n > 0
     if zcols === nothing && !lostz
         if loaded
             zkeys = filter(k -> k in towrite, ["Z", "Z_SE"])
@@ -434,7 +440,7 @@ function _lab_column(what, col; complex=false, unit="emitter", ids=eachindex(col
     ok = complex ? _LAB_NUMBER : _LAB_REAL
     bad = findfirst(v -> !(v isa ok), col)
     bad === nothing || throw(ArgumentError("save_smite: $what of $unit $(ids[bad]) is " *
-        "$(repr(col[bad])), a $(typeof(col[bad])); SMLMio saves " *
+        "$(repr(col[bad])) ($(typeof(col[bad]))); SMLMio saves " *
         (complex ? "single or double values, real or complex" : "Float32 or Float64 values") *
         "$hint; nothing was written"))
     isempty(col) && return eltype(col) === Float32 ? Float32[] : Float64[]
@@ -445,17 +451,21 @@ end
 
 # A column in SMITE's pixels from the emitters' values: a position (`origin`, the camera's first
 # edge) X = (x - origin) / px + 0.5, or an uncertainty (`origin` nothing) X_SE = σ / px, computed
-# in Float64 as the loaders compute them back, then single when the emitters' column is all
-# Float32. A finite value whose pixel value is not finite is an ArgumentError naming the emitter.
+# in Float64, then single when the emitters' column is all Float32. A finite value that the
+# loaders would read back as infinite, or a non-zero uncertainty they would read back as 0 (values
+# far outside any microscope's range), is an ArgumentError naming the emitter.
 function _pixel_column(what, col, origin, px)
     own = _lab_column(what, col)
     x = Vector{Float64}(own)
     vals = origin === nothing ? x ./ px : (x .- origin) ./ px .+ 0.5
     out = eltype(own) === Float32 ? Vector{Float32}(vals) : vals
-    bad = findfirst(i -> isfinite(own[i]) && !isfinite(out[i]), eachindex(own))
+    back(X) = origin === nothing ? Float64(X) * px : (Float64(X) - 0.5) * px   # as the loaders compute
+    ok(i) = !isfinite(own[i]) ||
+        (isfinite(back(out[i])) && (origin !== nothing || iszero(own[i]) || !iszero(back(out[i]))))
+    bad = findfirst(!ok, eachindex(own))
     bad === nothing || throw(ArgumentError("save_smite: $what of emitter $bad is $(own[bad]), which " *
-        "is not finite in SMITE's pixels as a MATLAB $(eltype(out) === Float32 ? "single" : "double"); " *
-        "nothing was written"))
+        "a MATLAB $(eltype(out) === Float32 ? "single" : "double") in SMITE's pixels cannot hold so " *
+        "that it loads back; nothing was written"))
     return out
 end
 
@@ -474,6 +484,6 @@ function _lab_counts(what, vals)
     bad === nothing || _not_whole("$what of emitter $bad", vals[bad], nothing)
     return Float64[Float64(v) for v in vals]
 end
-_not_whole(what, v, lo) = throw(ArgumentError("save_smite: $what is $(repr(v)), a $(typeof(v)); " *
+_not_whole(what, v, lo) = throw(ArgumentError("save_smite: $what is $(repr(v)) ($(typeof(v))); " *
     "SMITE stores it as a MATLAB double, so SMLMio saves an integer" *
     (lo === nothing ? "" : " of at least $lo") * " of at most 2^53 in size; nothing was written"))
