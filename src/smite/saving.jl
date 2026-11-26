@@ -14,7 +14,9 @@ Which fields are written, which are dropped and what a load gives back are on th
   `n_frames`, `n_datasets` and `metadata`) whose emitters have `x`, `y`, `photons`, `bg`, `σ_x`,
   `σ_y`, `σ_photons`, `σ_bg`, `frame`, `dataset` and `track_id`, as `Emitter2DFit` and
   `Emitter3DFit` do (plus `z` and `σ_z` for 3D), and whose camera has `pixel_edges_x` and
-  `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved.
+  `pixel_edges_y`. `Emitter2D` and `Emitter3D` cannot be saved. Values must be `Float32` or
+  `Float64`; `frame`, `dataset`, `track_id`, `n_frames` and `n_datasets` integers of at most
+  2^53 in size; anything else is an `ArgumentError` naming it.
 - `filepath::AbstractString`: an existing folder.
 - `filename::AbstractString`: name of the `.mat` file; an existing file of that name is
   rewritten.
@@ -52,49 +54,48 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     s = Dict{String,Any}()
 
     # Z columns for an Emitter3DFit element type, or for non-empty 3D data whose every emitter has
-    # z and σ_z, written by _z_columns. Anything else saves without Z; non-empty 3D or mixed data
-    # that lose Z get a warning.
+    # z and σ_z. Anything else saves without Z; non-empty 3D or mixed data that lose Z get a
+    # warning.
     d = emitter_ndims(smld.emitters)
     n = length(smld.emitters)
     zcols = nothing
     if eltype(smld.emitters) <: Emitter3DFit || (d == 3 && n > 0 &&
            all(e -> hasproperty(e, :z) && hasproperty(e, :σ_z), smld.emitters))
-        zcols = _z_columns(("z", "σ_z"), ([e.z for e in smld.emitters], [e.σ_z for e in smld.emitters]),
-                           "emitter", 1:n)
+        zcols = (_lab_column("z", [e.z for e in smld.emitters]),
+                 _lab_column("σ_z", [e.σ_z for e in smld.emitters]))
     end
     # The emitters' own Z was not saved: metadata Z and Z_SE, below, must not stand in for it
     lostz = zcols === nothing && n > 0 && d !== 2
     if lostz
         d === nothing && @warn("save_smite: mixed 2D/3D emitters: Z not saved; " *
                                "save 2D and 3D data separately")
-        d == 3 && @warn("save_smite: 3D emitters whose z or σ_z are not all numbers: Z not saved")
+        d == 3 && @warn("save_smite: 3D emitters without σ_z: Z not saved")
     end
-    
+
     # Extract arrays from emitters. SMITE stores X, Y and their standard errors in pixels, (1, 1)
     # the center of the top-left pixel; positions here are microns from the camera's corner.
     # SMITE has one PixelSize, so the camera must be the one the loaders will build from XSize,
     # YSize and the written pixel size (single for a Float32 camera, so the file loads back with a
     # Float32 camera; otherwise double): each edge, relative to the camera's first, within a
-    # thousandth of a pixel of the rebuilt camera's. Differences of edges are taken exactly and
-    # rounded once (_exact_sub: no overflow in a small integer type, no rounding of a Float16 or
-    # rational edge before the subtraction, whatever BigFloat's working precision) and compared in
-    # Float64.
+    # thousandth of a pixel of the rebuilt camera's, compared in Float64 (exact for the edges
+    # accepted: single, double, and integers up to 2^53).
     cam = smld.camera
     ex, ey = cam.pixel_edges_x, cam.pixel_edges_y
     nx, ny = length(ex) - 1, length(ey) - 1
     nx >= _SMITE_COUNT_MIN["XSize"] && ny >= _SMITE_COUNT_MIN["YSize"] || throw(ArgumentError(
         "save_smite: the camera has $nx × $ny pixels; SMITE's XSize and YSize must be at least " *
         "$(_SMITE_COUNT_MIN["XSize"]) and $(_SMITE_COUNT_MIN["YSize"])"))
-    all(isfinite, ex) && all(isfinite, ey) ||
-        throw(ArgumentError("save_smite: the camera's pixel edges are not all finite"))
-    x0, y0 = ex[1], ey[1]
-    px = _exact_sub(ex[2], ex[1])
+    edge_ok(v) = v isa _LAB_REAL ? isfinite(v) : _lab_whole(v)
+    all(edge_ok, ex) && all(edge_ok, ey) || throw(ArgumentError("save_smite: the camera's pixel " *
+        "edges must be finite Float32 or Float64 values, or integers of at most 2^53 in size"))
+    fx, fy = Vector{Float64}(ex), Vector{Float64}(ey)
+    x0, y0 = fx[1], fy[1]
+    px = fx[2] - fx[1]
     pxw = _smite_pixel_size("save_smite", "the camera's pixel size", eltype(ex) === Float32 ? Float32(px) : px)
     rebuilt = _smite_camera("save_smite", nx, ny, pxw)
     pxf = Float64(pxw)
-    same(edges, e0, re) = all(k -> abs(_exact_sub(edges[k], e0) - Float64(re[k])) <= pxf / 1000,
-                              eachindex(edges))
-    same(ex, x0, rebuilt.pixel_edges_x) && same(ey, y0, rebuilt.pixel_edges_y) ||
+    same(f, re) = all(k -> abs((f[k] - f[1]) - Float64(re[k])) <= pxf / 1000, eachindex(f))
+    same(fx, rebuilt.pixel_edges_x) && same(fy, rebuilt.pixel_edges_y) ||
         throw(ArgumentError("save_smite: SMITE stores one square pixel size; this camera's pixels are " *
                             "not uniform and square (its edges are not those of $nx × $ny pixels of " *
                             "$pxw µm)"))
@@ -108,8 +109,8 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         s["Z"] = zcols[1]
     end
     
-    s["Photons"] = _mat_column("photons", [e.photons for e in smld.emitters])
-    s["Bg"] = _mat_column("bg", [e.bg for e in smld.emitters])
+    s["Photons"] = _lab_column("photons", [e.photons for e in smld.emitters])
+    s["Bg"] = _lab_column("bg", [e.bg for e in smld.emitters])
     
     s["X_SE"] = _pixel_column("σ_x", [e.σ_x for e in smld.emitters], nothing, pxf)
     s["Y_SE"] = _pixel_column("σ_y", [e.σ_y for e in smld.emitters], nothing, pxf)
@@ -117,18 +118,18 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         s["Z_SE"] = zcols[2]
     end
     
-    s["Photons_SE"] = _mat_column("σ_photons", [e.σ_photons for e in smld.emitters])
-    s["Bg_SE"] = _mat_column("σ_bg", [e.σ_bg for e in smld.emitters])
-    
+    s["Photons_SE"] = _lab_column("σ_photons", [e.σ_photons for e in smld.emitters])
+    s["Bg_SE"] = _lab_column("σ_bg", [e.σ_bg for e in smld.emitters])
+
     # Counts and indices are doubles, as most SMITE results files hold them (MATLAB integer arithmetic
-    # rounds); one a double cannot hold exactly is an error, not a rounded value
-    s["FrameNum"] = _mat_counts("frame", [e.frame for e in smld.emitters])
-    s["DatasetNum"] = _mat_counts("dataset", [e.dataset for e in smld.emitters])
-    s["ConnectID"] = _mat_counts("track_id", [e.track_id for e in smld.emitters])
+    # rounds): integers a double holds exactly
+    s["FrameNum"] = _lab_counts("frame", [e.frame for e in smld.emitters])
+    s["DatasetNum"] = _lab_counts("dataset", [e.dataset for e in smld.emitters])
+    s["ConnectID"] = _lab_counts("track_id", [e.track_id for e in smld.emitters])
 
     # Add metadata: what the loaders need to read the file back, from the camera
-    s["NFrames"] = _mat_count("n_frames", smld.n_frames, "NFrames")
-    s["NDatasets"] = _mat_count("n_datasets", smld.n_datasets, "NDatasets")
+    s["NFrames"] = _lab_count("n_frames", smld.n_frames, "NFrames")
+    s["NDatasets"] = _lab_count("n_datasets", smld.n_datasets, "NDatasets")
     s["XSize"] = Float64(nx)
     s["YSize"] = Float64(ny)
     s["PixelSize"] = pxw
@@ -183,13 +184,14 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
     # with as many values as emitters, in the order given, as 0.1.0 wrote them. Such data carry no
     # record of which row each value belongs to (ids are not that: a join, a filter or frame
     # connection keeps or reuses them), so that order cannot be checked; the warning below says
-    # so. On 2D emitters they are written through the same writer as the emitters' z, so a save
-    # and a later save of its load agree; a value that is not a number drops them with a warning. The file says NDims 3 when both are written
+    # so. On 2D emitters they are written through the same rule as the emitters' z, so a save and
+    # a later save of its load agree, except that complex values (SMITE's fits give them; a 2D load
+    # does not screen Z) are written as complex double. The file says NDims 3 when both are written
     # and it has localizations, the loaded file's Z had values (SMITE writes NDims 2 for its 3D
     # fits too) or the metadata's NDims is 3. When the emitters' own Z was not saved (lostz),
     # metadata Z and Z_SE are not saved at all.
     loaded = haskey(md, "smite_per_localization_fields")
-    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "metadata row", collect(1:n), n > 0
+    zkeys, zsrc, zunit, zids, zhad = String[], Vector[], "value", collect(1:n), n > 0
     if zcols === nothing && !lostz
         if loaded
             zkeys = filter(k -> k in towrite, ["Z", "Z_SE"])
@@ -201,13 +203,9 @@ function save_smite(smld::AbstractSMLD, filepath::AbstractString, filename::Abst
         end
     end
     mdz = Dict{String,Any}()
-    if !isempty(zkeys)
-        conv = _z_columns(zkeys, zsrc, zunit, zids)
-        if conv === nothing
-            @warn("save_smite: $(join(zkeys, ", ")) not saved: they hold values that are not numbers")
-        else
-            foreach((k, c) -> mdz[k] = c, zkeys, conv)
-        end
+    for (k, src) in zip(zkeys, zsrc)
+        mdz[k] = _lab_column("metadata $k", src; complex=true, unit=zunit, ids=zids,
+                             hint=" (remove it from the metadata to save without it)")
     end
     ndims3_from_md = length(mdz) == 2 && (n > 0 || zhad || _is_ndims3(get(md, "NDims", nothing)))
     # Data not loaded by SMLMio: SMITE's per-localization fields written from the metadata with one
@@ -469,78 +467,6 @@ function _collect_bad_keys!(bad, path, v::AbstractArray)
 end
 _collect_bad_keys!(bad, path, _) = nothing
 
-# A numeric column as MATLAB writes it, converted by its values: single when every value is
-# Float32; otherwise double when every value is a real number (a complex one with a zero imaginary
-# part is its real part), or complex double when some value has a non-zero imaginary part (SMITE's
-# fits can give such values, and the loaders screen them out). MAT writes a vector whose element
-# type is not concrete as a cell, which SMITE cannot compute with, and refuses some types (Float16,
-# BigFloat), hence the conversion. Every value must convert exactly: the result is the converted
-# vector, or (i, kind) for a value that cannot be written, kind :inexact for a number a double would
-# round (found wherever it is in the column) and otherwise :notnumber.
-function _mat_numbers(col)
-    isempty(col) && return eltype(col) === Float32 ? Float32[] : Float64[]
-    all(x -> x isa Float32, col) && return convert(Vector{Float32}, col)
-    bad = findfirst(x -> x isa Number && !_exact_double(x), col)
-    bad === nothing || return (bad, :inexact)
-    bad = findfirst(x -> !(x isa Number), col)
-    bad === nothing || return (bad, :notnumber)
-    all(_is_real, col) && return Float64[_float64(real(x)) for x in col]
-    return ComplexF64[ComplexF64(_float64(real(x)), _float64(imag(x))) for x in col]
-end
-_exact_double(x) = x isa Union{Float32,Float64,ComplexF32,ComplexF64} ||
-    (_exact_part(real(x)) && _exact_part(imag(x)))
-_exact_part(v) = (f = _float64(v); isnan(f) ? isnan(v) : _same_value(f, v) && signbit(f) == signbit(v))
-# A real number: a Real, or a complex number whose imaginary part is zero
-_is_real(x) = x isa Number && iszero(imag(x))
-
-# The emitters' column `what`, or an ArgumentError naming the first emitter whose value cannot be
-# written, before anything is written.
-function _mat_column(what, col)
-    r = _mat_numbers(col)
-    r isa Tuple && _unwritable(what, "emitter", r[1], col[r[1]])
-    return r
-end
-_unwritable(what, unit, i, v) = throw(ArgumentError("save_smite: $what of $unit $i is $(repr(v)), " *
-    "which is not a number that a MATLAB double holds exactly (a complex double for a complex " *
-    "value); nothing was written"))
-
-# Z and Z_SE as written, for the emitters (unit "emitter") or for file rows kept in metadata
-# ("file row", `ids` the rows): each column through _mat_numbers. A number a double would round is
-# an ArgumentError naming the field and the emitter or row; a value that is not a number
-# (missing) gives nothing, and the file is saved without these columns.
-function _z_columns(names, cols, unit, ids)
-    conv = map(_mat_numbers, cols)
-    for (name, vals, r) in zip(names, cols, conv)
-        r isa Tuple && r[2] === :inexact && _unwritable(name, unit, ids[r[1]], vals[r[1]])
-    end
-    return any(r -> r isa Tuple, conv) ? nothing : collect(conv)
-end
-
-# A column in SMITE's pixels: a position (`origin`, the camera's first edge) X = (x - origin) / px
-# + 0.5, or an uncertainty (`origin` nothing) X_SE = σ / px, each from the value as checked by
-# _mat_column, in Float64 (ComplexF64 for complex values) and then single when the emitters'
-# column is all Float32. The origin, of whatever number type, is subtracted from each value
-# exactly and rounded once (_exact_sub). A finite value whose pixel value the loaders would read
-# back as infinite, or an uncertainty that would read back as 0 when it is not, is an
-# ArgumentError naming the emitter.
-function _pixel_column(what, col, origin, px)
-    own = _mat_column(what, col)
-    T = eltype(own) <: Complex ? Complex{Float64} : Float64
-    vals = if origin === nothing
-        T[T(v) / px for v in own]
-    else
-        T[_exact_sub(v, origin) / px + 0.5 for v in own]
-    end
-    out = eltype(own) === Float32 ? Float32.(vals) : vals
-    back(X) = origin === nothing ? X * px : (X - 0.5) * px      # as the loaders compute (px a Float64)
-    ok(i) = !isfinite(own[i]) || (isfinite(back(out[i])) && (origin !== nothing || iszero(own[i]) || !iszero(out[i])))
-    bad = findfirst(!ok, eachindex(own))
-    bad === nothing || throw(ArgumentError("save_smite: $what of emitter $bad is $(repr(col[bad])), " *
-        "which a MATLAB $(eltype(out) === Float32 ? "single" : "double") in SMITE's pixels cannot " *
-        "hold so that it loads back; nothing was written"))
-    return out
-end
-
 # A value as MAT can write it, changed only where it must be. MAT reads an unfilled element of a
 # MATLAB cell as an empty array of element type Union{}, which its writer refuses; such an element
 # is written as an empty double array, as SMITE holds an empty field. A tuple (metadata built in
@@ -592,85 +518,64 @@ function _smite_metadata(md)
     return _smite_empty_text!(out)
 end
 
-# a - b rounded once to the nearest Float64 (a ComplexF64 for a complex a), without touching
-# BigFloat's working precision or rounding mode (which Julia 1.10 shares between threads). When a
-# and b both convert to Float64 exactly (every Float16, Float32 and Float64; most integers), one
-# IEEE subtraction rounds the exact difference once. Otherwise finite integers, rationals and
-# binary floats (BigFloat) are subtracted exactly as fractions of BigInts and rounded once
-# (_round_float64). Other numbers and values that are not finite are converted, then subtracted.
-function _exact_sub(a::Real, b::Real)
-    fa, fb = _float64(a), _float64(b)
-    _same_value(fa, a) && _same_value(fb, b) && return fa - fb
-    exact = Union{Integer,Rational,Float16,Float32,Float64,BigFloat}
-    (a isa exact && b isa exact && isfinite(a) && isfinite(b)) || return fa - fb
-    (na, da), (nb, db) = _fraction(a), _fraction(b)
-    return _round_float64(na * db - nb * da, da * db)
-end
-_exact_sub(a::Complex, b::Real) = complex(_exact_sub(real(a), b), _float64(imag(a)))
+# What save_smite writes: the values SMITE files and the lab's packages hold. A measured value (a
+# position, an uncertainty, photons, background, z) is a single or double, Float32 or Float64; Z
+# and Z_SE kept in metadata from a file may also be complex, as SMITE's fits can give them. A
+# count or index (frame, dataset, track id, n_frames, n_datasets), or a camera edge given as an
+# integer, is an integer a double holds exactly: at most 2^53 in size. Anything else is one
+# ArgumentError naming the field, before anything is written.
+const _LAB_REAL = Union{Float32,Float64}
+const _LAB_NUMBER = Union{Float32,Float64,ComplexF32,ComplexF64}
 
-# x as (numerator, denominator), BigInts with the denominator positive, exactly
-_fraction(x::Union{Integer,Rational}) = (BigInt(numerator(x)), BigInt(denominator(x)))
-# A finite binary float through Base.decompose (internal, but exact: Rational{BigInt} of a
-# BigFloat rounds at BigFloat's working precision): x == s * 2^e / d with d = ±1, the sign in d
-function _fraction(x::AbstractFloat)
-    s, e, d = Base.decompose(x)
-    n = BigInt(s) * sign(d)
-    return e >= 0 ? (n << e, big(1)) : (n, big(1) << -e)
-end
-
-# The Float64 nearest num / den (den > 0), ties to even, as IEEE rounds: subnormal results keep
-# fewer bits, and a value beyond the largest double is infinite. Integer arithmetic only.
-function _round_float64(num::BigInt, den::BigInt)
-    iszero(num) && return 0.0
-    m = abs(num)
-    # A quotient of at least 56 bits, the remainder folded into its last bit (sticky), so that it
-    # rounds as the exact value does: value = q * 2^e, up to the sticky bit
-    k = max(0, 56 + ndigits(den; base=2) - ndigits(m; base=2))
-    q, r = divrem(m << k, den)
-    q = 2q + !iszero(r)
-    e = -k - 1
-    nq = ndigits(q; base=2)
-    E = nq - 1 + e                       # 2^E <= value < 2^(E + 1)
-    p = min(53, E + 1075)                # bits a double keeps at that exponent (2^-1074 the least)
-    p < 0 && return copysign(0.0, num)   # below half the least subnormal
-    shift = nq - p                       # at least 3
-    t = q >> shift
-    rest = q - (t << shift)
-    half = big(1) << (shift - 1)
-    (rest > half || (rest == half && isodd(t))) && (t += 1)
-    v = ldexp(Float64(t), e + shift)     # exact: t has at most p bits, or is 2^p
-    return num < 0 ? -v : v
+# The column `what` as MATLAB writes it: single when every value is Float32, otherwise double
+# (complex double when a value is complex and `complex` allows it). MAT writes a vector whose
+# element type is not concrete as a cell, which SMITE cannot compute with, hence the conversion,
+# exact for these types. `unit` and `ids` say where a refused value is: an emitter and its index,
+# or a file row and its row.
+function _lab_column(what, col; complex=false, unit="emitter", ids=eachindex(col), hint="")
+    ok = complex ? _LAB_NUMBER : _LAB_REAL
+    bad = findfirst(v -> !(v isa ok), col)
+    bad === nothing || throw(ArgumentError("save_smite: $what of $unit $(ids[bad]) is " *
+        "$(repr(col[bad])), a $(typeof(col[bad])); SMLMio saves " *
+        (complex ? "single or double values, real or complex" : "Float32 or Float64 values") *
+        "$hint; nothing was written"))
+    isempty(col) && return eltype(col) === Float32 ? Float32[] : Float64[]
+    all(v -> v isa Float32, col) && return Vector{Float32}(col)
+    all(v -> v isa _LAB_REAL, col) && return Vector{Float64}(col)
+    return Vector{ComplexF64}(col)
 end
 
-# x as a Float64, rounded to nearest once: a Rational through _round_float64 (Julia converts a
-# Rational{BigInt} through BigFloat at its working precision), anything else by Float64.
-_float64(x::Rational) = isfinite(x) ? _round_float64(_fraction(x)...) : Float64(x)
-_float64(x::Real) = Float64(x)
+# A column in SMITE's pixels from the emitters' values: a position (`origin`, the camera's first
+# edge) X = (x - origin) / px + 0.5, or an uncertainty (`origin` nothing) X_SE = σ / px, computed
+# in Float64 as the loaders compute them back, then single when the emitters' column is all
+# Float32. A finite value whose pixel value is not finite is an ArgumentError naming the emitter.
+function _pixel_column(what, col, origin, px)
+    own = _lab_column(what, col)
+    x = Vector{Float64}(own)
+    vals = origin === nothing ? x ./ px : (x .- origin) ./ px .+ 0.5
+    out = eltype(own) === Float32 ? Vector{Float32}(vals) : vals
+    bad = findfirst(i -> isfinite(own[i]) && !isfinite(out[i]), eachindex(own))
+    bad === nothing || throw(ArgumentError("save_smite: $what of emitter $bad is $(own[bad]), which " *
+        "is not finite in SMITE's pixels as a MATLAB $(eltype(out) === Float32 ? "single" : "double"); " *
+        "nothing was written"))
+    return out
+end
 
-# Whether the Float64 f equals x exactly. Julia 1.10 compares a float with a Rational{BigInt}
-# through BigFloat at its working precision, so a finite Rational is compared as a fraction.
-_same_value(f::Float64, x::Rational) = isfinite(f) && isfinite(x) ?
-    ((nf, df) = _fraction(f); nf * denominator(x) == BigInt(numerator(x)) * df) : f == x
-_same_value(f::Float64, x::Real) = f == x
+# An integer a MATLAB double holds exactly: at most 2^53 in size, and at least `lo`.
+_lab_whole(v, lo=-2^53) = v isa Integer && max(lo, -2^53) <= v <= 2^53
 
-# A count or index as a MATLAB double, by the loaders' rule (_fits_int, _SMITE_COUNT_MIN) so that
-# every file save_smite writes loads: a whole number in Int's range, at least `lo`, that a double
-# holds exactly (every whole number up to 2^53, and some above). Anything else is an
-# ArgumentError naming the value, before anything is written.
-function _mat_count(what, v, key)
+# A count as a MATLAB double, at least the loaders' bound for `key` (_SMITE_COUNT_MIN), so that
+# every file save_smite writes loads; and the emitters' indices `what`, one per emitter.
+function _lab_count(what, v, key)
     lo = _SMITE_COUNT_MIN[key]
-    _mat_count_ok(v, lo) || _bad_count(what, v, lo)
-    return _float64(real(v))
+    _lab_whole(v, lo) || _not_whole(what, v, lo)
+    return Float64(v)
 end
-function _mat_counts(what, vals)
-    bad = findfirst(v -> !_mat_count_ok(v, typemin(Int)), vals)
-    bad === nothing || _bad_count("$what of emitter $bad", vals[bad], typemin(Int))
-    return Float64[_float64(real(v)) for v in vals]
+function _lab_counts(what, vals)
+    bad = findfirst(v -> !_lab_whole(v), vals)
+    bad === nothing || _not_whole("$what of emitter $bad", vals[bad], nothing)
+    return Float64[Float64(v) for v in vals]
 end
-_mat_count_ok(v, lo) = _fits_int(v) && real(v) >= lo && _same_value(_float64(real(v)), real(v))
-function _bad_count(what, v, lo)
-    bound = lo == typemin(Int) ? "" : " of at least $lo"
-    throw(ArgumentError("save_smite: $what is $(repr(v)); SMITE stores it as a MATLAB double, so " *
-        "it must be a whole number$bound in Int's range that a double holds exactly (every whole " *
-        "number up to 2^53); nothing was written"))
-end
+_not_whole(what, v, lo) = throw(ArgumentError("save_smite: $what is $(repr(v)), a $(typeof(v)); " *
+    "SMITE stores it as a MATLAB double, so SMLMio saves an integer" *
+    (lo === nothing ? "" : " of at least $lo") * " of at most 2^53 in size; nothing was written"))

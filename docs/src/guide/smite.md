@@ -124,12 +124,11 @@ A missing folder, a folder (or anything but a file) of the file's name, a symlin
 name that is no file, an existing file you may not write, too little free space to rewrite one
 (where the system reports it), a camera whose pixels are not uniform and square (its edges,
 relative to its first, are not within a thousandth of a pixel of those the loaders rebuild from
-`XSize`, `YSize` and the written `PixelSize`, the differences of edges taken exactly and each
-rounded once to a double, for integer, rational and `BigFloat` edges too), whose
-edges are not all finite, or that
+`XSize`, `YSize` and the written `PixelSize`), whose edges are not all finite `Float32` or
+`Float64` values or integers of at most 2^53 in size, or that
 the loaders could not build back (no pixels along an axis, a first pixel of zero or negative
 width, a pixel size that is not finite as written, or `Float32` edges that round onto each
-other), and
+other), a value of a type `save_smite` does not save (below), and
 metadata keys that are not MATLAB names (an ASCII letter, then up to 62 letters, digits or
 underscores; Dict values and arrays of Dicts need such string keys) are each an
 `ArgumentError` naming what is wrong, and nothing is written.
@@ -172,32 +171,30 @@ that says so). A write that takes fewer bytes than it was given is such an error
 file that ends up shorter than the copy. The data are unchanged in memory, so save again once
 the cause is fixed. It contains:
 
-- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`. Each
-  column is converted by its values: all `Float32` stays MATLAB single, real values are
-  written as double, and a column with a complex value (one with a non-zero imaginary part;
-  otherwise it is its real part) as complex double, which the loaders screen as they do
-  SMITE's complex fits. So `Float32` and `Float64` emitters together are written as double,
-  never as the cell MAT would write for a mixed vector (which SMITE cannot compute with), and
-  integers or `Float16` values (which MAT cannot write) become doubles. A value that is not a
-  number, or a number that a double would round (a `BigFloat`, an integer above 2^53), is an
-  `ArgumentError` naming the field and the emitter, and nothing is written. Positions are
-  computed in `Float64` from the written pixel size (the camera's origin subtracted exactly),
-  then stored as single for `Float32` data; a finite one whose value in pixels would load back
-  as infinite, or a non-zero uncertainty that would load back as 0, is an `ArgumentError` too.
+- `X`, `Y`, `X_SE`, `Y_SE` in SMITE's pixels, and `Photons`, `Bg`, `Photons_SE`, `Bg_SE`.
+  `save_smite` saves the values SMITE files and the lab's packages hold: each of these must be a
+  `Float32` or `Float64` (MATLAB single or double). A column of all `Float32` is written as
+  single, any other as double, so `Float32` and `Float64` emitters together are written as
+  double, never as the cell MAT would write for a mixed vector (which SMITE cannot compute
+  with). Any other value (an integer, a `Float16`, a `BigFloat`, a rational, a complex number,
+  `missing`, text) is an `ArgumentError` naming the field, the emitter, the value and its type,
+  and nothing is written. Positions are computed in `Float64` from the written pixel size, then
+  stored as single for `Float32` data; a finite one whose value in pixels is not finite is an
+  `ArgumentError` too.
 - `Z`, `Z_SE` in µm for `Emitter3DFit` emitters, or for non-empty 3D data whose every emitter
-  has properties `z` and `σ_z`, converted as above; a `z` or `σ_z` a double would round is an
-  `ArgumentError`, wherever it is in the column. 3D data whose `z` or `σ_z` are not all numbers
-  (`missing`), and mixed 2D/3D data, save without `Z`, with a warning: an SMD has one `Z` column
-  for all localizations, so save 2D and 3D data separately to keep it. The metadata's `Z` and
-  `Z_SE` are then not saved either, so they never stand in for the emitters' `z`.
+  has properties `z` and `σ_z`, by the same rule. 3D data whose emitters have no `σ_z`, and
+  mixed 2D/3D data, save without `Z`, with a warning: an SMD has one `Z` column for all
+  localizations, so save 2D and 3D data separately to keep it. The metadata's `Z` and `Z_SE`
+  are then not saved either, so they never stand in for the emitters' `z`.
 - `XSize`, `YSize` and `PixelSize` from the camera (`PixelSize` as single for a `Float32`
   camera, so the file loads back with the same camera), `NFrames`, `NDatasets` and `NDims`; counts
-  and indices as doubles, as most SMITE results files hold them. They follow the loaders' rule,
-  so every file `save_smite` writes loads: `n_frames` and `n_datasets` must be whole numbers of
-  at least 0, and each emitter's `frame`, `dataset` and `track_id` whole numbers, each in
-  `Int`'s range and held exactly by a double (every whole number up to 2^53, and some above).
-  Any other value is an `ArgumentError` naming it, and nothing is written. SMITE has one pixel
-  size, so a camera whose pixels are not uniform and square is an error.
+  and indices as doubles, as most SMITE results files hold them. `n_frames` and `n_datasets`
+  must be integers of at least 0, and each emitter's `frame`, `dataset` and `track_id` integers,
+  each of at most 2^53 in size, which a double holds exactly, so every file `save_smite` writes
+  loads. Any other value (a whole `Float64`, a rational, `missing`) is an `ArgumentError` naming
+  it, and nothing is written. SMITE has one pixel size, so a camera whose pixels are not uniform
+  and square is an error; its edges must be `Float32` or `Float64` values or integers of at most
+  2^53 in size.
 - every metadata entry that is not an emitter column, except the loaders' own: `original_file`,
   `data_size`, `pixel_size`, `smite_defaulted_fields`, `smite_per_localization_fields`,
   `smite_row_frames`, `smite_row_photons`, `complex_fields_removed`, `complex_fields`,
@@ -215,9 +212,10 @@ the cause is fixed. It contains:
 - SMITE's per-localization fields a loader kept, for the saved emitters' rows, so after a filter
   `PValue` still belongs to its localization. Each keeps its MATLAB class (SMITE's `IndSMD` is
   a cell, `ThreshFlag` uint32), except `Z` and `Z_SE`, which `load_smite_2d` keeps from a 3D
-  file: on 2D emitters they are written as `z` and `σ_z` are, above (a number a double would
-  round is an `ArgumentError` naming the field and file row; a value that is not a number drops
-  both, with a warning), and the file says `NDims` 3 when both are written and it has
+  file: on 2D emitters they are written as `z` and `σ_z` are, above, except that they may also
+  hold complex values, as SMITE's fits give them (a 2D load does not screen `Z`), written as
+  complex double; any other value is an `ArgumentError` naming the field and file row, and
+  removing the field from the metadata saves without it. The file says `NDims` 3 when both are written and it has
   localizations, the loaded file's `Z` had values (SMITE writes `NDims` 2 for its own 3D fits)
   or the metadata's `NDims` is 3. `Z` and `Z_SE` in the metadata of data not loaded by SMLMio
   (built by hand, or loaded by SMLMData 0.7.1, which kept a 3D file's `Z` that way) are written

@@ -325,17 +325,24 @@ end
         hz = HiddenZLoc{Float64}(1.0, 1.5, 0.5, 1000.0, 10.0, 0.01, 0.01, 0.02, 50.0, 2.0, 1, 1, 0, 1)
         U3 = Union{Emitter3DFit{Float32}, Emitter3DFit{Float64}}
         unchanged = (sm([e2, e2]), sm([e3, e3]), sm([e3f, e3f]), sm(U3[]), sm(A[]), sm(A[e2, e3]),
-                     sm([fz, fz]), sm([hz, hz]), sm([_oddz(missing, 0.02), _oddz(missing, 0.02)]),
-                     sm(A[e3, _oddz(missing, 0.02)]))
+                     sm([fz, fz]), sm([hz, hz]))
         for s in unchanged
             @test first(_legacy_compare(s)) == camkeys
         end
+        # A z that is not a single or double (missing, Float16), which 0.7.0 saved without Z, is
+        # now an error naming it, and nothing is written
+        mktempdir() do dir
+            for s in (sm([_oddz(missing, 0.02), _oddz(missing, 0.02)]), sm(A[e3, _oddz(missing, 0.02)]),
+                      sm([_oddz(Float16(0.5), Float16(0.02))]))
+                @test_throws r"save_smite: z of emitter \d is .*Float32 or Float64" save_smite(s, dir, "z.mat")
+                @test !isfile(joinpath(dir, "z.mat"))
+            end
+        end
         # Float32 and Float64 z together make an AbstractFloat column, which MAT would write as a
-        # cell, and MAT cannot write Float16 at all; both are written as double.
+        # cell; it is written as double.
         widened = (sm(A[e3, e3b]), sm([f3, f3b]), sm([_oddz(0.5, 0.02), _oddz(0.25, 0.03)]),
                    sm([_oddz(0.5f0, 0.02f0), _oddz(0.25f0, 0.03f0)]),
-                   sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]),
-                   sm([_oddz(Float16(0.5), Float16(0.02)), _oddz(Float16(0.25), Float16(0.02))]))
+                   sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]))
         for s in widened
             added, new = _legacy_compare(s)
             @test added == [camkeys; "Z"; "Z_SE"]
@@ -354,19 +361,17 @@ end
         e3 = Emitter3DFit{Float64}(1.0, 1.5, 0.5, 1000.0, 10.0, 0.01, 0.01, 0.125, 50.0, 2.0)
         mktempdir() do dir
             @test_logs (:warn, r"mixed 2D/3D") save_smite(sm(A[e2, e3]), dir, "m.mat")
-            @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(missing, 0.02)]), dir, "o.mat")
-            # z that are not real numbers save without Z (missing, above); a real z a double would
-            # round (BigFloat) is an error naming the emitter, and nothing is written
-            @test_throws r"z of emitter 2 is .*MATLAB double holds exactly" save_smite(
+            @test_logs (:warn, r"3D emitters without σ_z") save_smite(
+                sm([ForeignZNoSigmaZ{Float64}(1.0, 1.5, 0.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0, 1, 1, 0, 1)]),
+                dir, "o.mat")
+            # A z or σ_z that is not a single or double (BigFloat, complex) is an error naming the
+            # emitter, and nothing is written
+            @test_throws r"z of emitter 2 is .*BigFloat; SMLMio saves Float32 or Float64" save_smite(
                 sm([_oddz(0.5, 0.02), _oddz(big"0.1", 0.02)]), dir, "b.mat")
             @test !isfile(joinpath(dir, "b.mat"))
             @test_throws r"σ_z of emitter 1" save_smite(sm([_oddz(0.5, big"0.1")]), dir, "b.mat")
-            # A complex z with no imaginary part is its real part, as 0.1.0 saved it
-            @test_logs save_smite(sm([_oddz(0.25 + 0.0im, 0.02)]), dir, "c.mat")
-            @test matread(joinpath(dir, "c.mat"))["SMD"]["Z"] === 0.25
-            # Float16 z loses nothing: written as double
-            @test_logs save_smite(sm([_oddz(Float16(0.5), Float16(0.02))]), dir, "h.mat")
-            @test matread(joinpath(dir, "h.mat"))["SMD"]["Z"] === 0.5
+            @test_throws r"z of emitter 1 is .*ComplexF64" save_smite(sm([_oddz(0.25 + 0.0im, 0.02)]), dir, "b.mat")
+            @test !isfile(joinpath(dir, "b.mat"))
             # Float32 and Float64 z together lose nothing: written as double
             @test_logs save_smite(sm([_oddz(0.5, 0.02), _oddz(0.25f0, 0.03)]), dir, "f.mat")
             @test eltype(matread(joinpath(dir, "f.mat"))["SMD"]["Z"]) == Float64
@@ -707,10 +712,10 @@ end
     @test occursin("/a/b/c", sprint(show, MIME("text/plain"), smd))
 end
 
-@testset "save_smite applies the loaders' rule to counts and indices" begin
+@testset "save_smite saves counts and indices that are integers up to 2^53" begin
     cam = IdealCamera(1:64, 1:64, 0.1)
     two53 = Int64(2)^53
-    big = two53 + 1                   # the first whole number a double cannot hold
+    big = two53 + 1                   # the first integer a double cannot hold
     sm(es, nf, nd) = AnyCountSMLD(es, cam, nf, nd, Dict{String,Any}())
     a = _anyloc()
     mktempdir() do dir
@@ -721,24 +726,23 @@ end
             back = load_smite_2d(SmiteSMD(dir, "zero.mat"))
             @test back.n_frames == nf && back.n_datasets == nd
         end
-        # Whole numbers a double holds exactly, of any number type, write and load back exactly
-        # (2^53 + 2 is such a double)
+        # Integers of any type up to 2^53 in size write and load back exactly
         if Sys.WORD_SIZE == 64
-            save_smite(sm([_anyloc(frame=two53, dataset=UInt64(5), track_id=two53 + 2)], two53 + 2, 7 // 1),
+            save_smite(sm([_anyloc(frame=two53, dataset=UInt64(5), track_id=-two53)], two53, Int32(7)),
                        dir, "edge.mat")
             back = load_smite_2d(SmiteSMD(dir, "edge.mat"))
-            @test back.n_frames == two53 + 2 && back.n_datasets == 7
+            @test back.n_frames == two53 && back.n_datasets == 7
             e = back.emitters[1]
-            @test e.frame == two53 && e.dataset == 5 && e.track_id == two53 + 2
+            @test e.frame == two53 && e.dataset == 5 && e.track_id == -two53
         end
-        # Anything the loaders would refuse or read back differently is an ArgumentError naming
-        # the value; nothing is written
+        # Anything else is an ArgumentError naming the value; nothing is written. A count is an
+        # integer: a whole Float64 or a Rational is refused too.
         for (name, smld, msg) in (
                 ("nf.mat", sm([a], big, 1), "n_frames is $big"),
-                ("nfr.mat", sm([a], (big)//1, 1), "n_frames is $(repr(big//1))"),
+                ("nfr.mat", sm([a], 7 // 1, 1), "n_frames is 7//1"),
+                ("nff.mat", sm([a], 3.0, 1), "n_frames is 3.0"),
                 ("nfu.mat", sm([a], UInt64(1) << 63, 1), "n_frames is $(repr(UInt64(1) << 63))"),
-                ("nfneg.mat", sm([a], -1, 1), "n_frames is -1; SMITE stores it as a MATLAB double, so it must be a whole number of at least 0"),
-                ("nfh.mat", sm([a], 2.5, 1), "n_frames is 2.5"),
+                ("nfneg.mat", sm([a], -1, 1), "n_frames is -1, a Int64; SMITE stores it as a MATLAB double, so SMLMio saves an integer of at least 0"),
                 ("nd.mat", sm([a], 1, big), "n_datasets is $big"),
                 ("ndneg.mat", sm([a], 1, -2), "n_datasets is -2"),
                 ("fr.mat", sm([a, _anyloc(frame=big)], 1, 1), "frame of emitter 2 is $big"),
@@ -749,7 +753,7 @@ end
                 ("trm.mat", sm([_anyloc(track_id=missing)], 1, 1), "track_id of emitter 1 is missing"))
             err = try save_smite(smld, dir, name); nothing catch ex; ex end
             @test err isa ArgumentError
-            err isa ArgumentError && @test occursin(msg, err.msg) && occursin("MATLAB double", err.msg)
+            err isa ArgumentError && @test occursin(msg, err.msg) && occursin("of at most 2^53 in size", err.msg)
             @test !isfile(joinpath(dir, name))
         end
         # An existing file is left as it was
@@ -760,35 +764,30 @@ end
     end
 end
 
-@testset "save_smite writes every emitter column exactly, as single or double" begin
+@testset "save_smite saves emitter values that are Float32 or Float64" begin
     cam = IdealCamera(1:64, 1:64, 0.1)
     sm(es) = AnyCountSMLD(es, cam, 1, 1, Dict{String,Any}())
     mktempdir() do dir
-        # Integers and Float16 values become doubles exactly (MAT cannot write Float16)
-        save_smite(sm([_anyloc(photons=Int64(1000), bg=Float16(2.5)), _anyloc(photons=1200.0, bg=Float16(3))]),
-                   dir, "ints.mat")
-        smd = matread(joinpath(dir, "ints.mat"))["SMD"]
+        # Float32 and Float64 values together make a double column (MAT would write the mixed
+        # column as a cell); an all-Float32 column is single
+        save_smite(sm([_anyloc(photons=1000.0f0, bg=2.5f0), _anyloc(photons=1200.0, bg=3.0f0)]), dir, "mix.mat")
+        smd = matread(joinpath(dir, "mix.mat"))["SMD"]
         @test smd["Photons"] isa AbstractArray{Float64} && vec(smd["Photons"]) == [1000.0, 1200.0]
-        @test smd["Bg"] isa AbstractArray{Float64} && vec(smd["Bg"]) == [2.5, 3.0]
-        @test [e.photons for e in load_smite_2d(SmiteSMD(dir, "ints.mat")).emitters] == [1000.0, 1200.0]
-        # A complex value is written as a complex double column, as 0.1.0 wrote it; the loaders
-        # drop that localization, as they do for SMITE's complex fits
-        save_smite(sm([_anyloc(photons=1.0 + 1.0im), _anyloc(photons=900.0)]), dir, "pc.mat")
-        @test matread(joinpath(dir, "pc.mat"))["SMD"]["Photons"] isa AbstractArray{ComplexF64}
-        back = @test_logs (:warn, r"non-zero imaginary") load_smite_2d(SmiteSMD(dir, "pc.mat"))
-        @test [e.photons for e in back.emitters] == [900.0]
-        # A number a double would round, or a value that is not a number, is an ArgumentError
-        # naming the emitter (0.1.0 wrote a cell its loader refused); nothing is written
+        @test smd["Bg"] isa AbstractArray{Float32} && vec(smd["Bg"]) == [2.5f0, 3.0f0]
+        @test [e.photons for e in load_smite_2d(SmiteSMD(dir, "mix.mat")).emitters] == [1000.0, 1200.0]
+        # Anything else is an ArgumentError naming the emitter, the value and its type; nothing is
+        # written
         for (name, es, msg) in (
-                ("p53.mat", [_anyloc(photons=Int64(2)^53 + 1), _anyloc(photons=1.0)], "photons of emitter 1 is 9007199254740993"),
+                ("pint.mat", [_anyloc(photons=Int64(1000)), _anyloc(photons=1.0)], "photons of emitter 1 is 1000, a Int64"),
+                ("bgh.mat", [_anyloc(), _anyloc(bg=Float16(2.5))], "bg of emitter 2 is Float16(2.5), a Float16"),
                 ("bgbig.mat", [_anyloc(), _anyloc(bg=big"0.1")], "bg of emitter 2 is"),
                 ("pmiss.mat", [_anyloc(photons=missing)], "photons of emitter 1 is missing"),
                 ("xbig.mat", [_anyloc(x=big"0.1")], "x of emitter 1 is"),
-                ("pcbig.mat", [_anyloc(photons=big"0.1" + 1im)], "photons of emitter 1 is"),
+                ("pc.mat", [_anyloc(photons=1.0 + 1.0im)], "photons of emitter 1 is 1.0 + 1.0im, a ComplexF64"),
                 ("ptext.mat", [_anyloc(), _anyloc(bg="10")], "bg of emitter 2 is \"10\""))
             err = try save_smite(sm(es), dir, name); nothing catch ex; ex end
             @test err isa ArgumentError
-            err isa ArgumentError && @test occursin(msg, err.msg) && occursin("MATLAB double holds exactly", err.msg)
+            err isa ArgumentError && @test occursin(msg, err.msg) && occursin("SMLMio saves Float32 or Float64 values", err.msg)
             @test !isfile(joinpath(dir, name))
         end
     end
@@ -801,120 +800,55 @@ end
         for (name, cam, msg) in (
                 ("ny0.mat", IdealCamera(2, 0, 0.125), "the camera has 2 × 0 pixels"),
                 ("wide.mat", IdealCamera(2^24 + 1, 1, 1.0f0), "16777217 × 1 pixels of 1.0 µm do not give finite, increasing"),
-                ("inf.mat", IdealCamera(1, 1, big"1e309"), "the camera's pixel size Inf is not finite"))
+                ("infedge.mat", IdealCamera([0.0, Inf], [0.0, 1.0]), "pixel edges must be finite Float32 or Float64"))
             err = try save_smite(SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name); nothing catch ex; ex end
             @test err isa ArgumentError
             err isa ArgumentError && @test occursin(msg, err.msg)
             @test !isfile(joinpath(dir, name))
         end
+        # Edges that are not single, double or integers up to 2^53 are refused
+        for (name, cam) in (("big.mat", IdealCamera(1, 1, big"0.1")),
+                            ("f16.mat", IdealCamera(512, 1, Float16(0.1))),
+                            ("rat.mat", IdealCamera([0 // 1, 1 // 10], [0 // 1, 1 // 10])),
+                            ("i53.mat", IdealCamera([2^53, 2^53 + 2], [0, 2])))
+            @test_throws r"pixel edges must be finite Float32 or Float64 values, or integers of at most 2\^53" save_smite(
+                SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name)
+            @test !isfile(joinpath(dir, name))
+        end
         # Positions in SMITE's pixels are computed in Float64 from the written pixel size: a
         # position a double holds loads back exactly, with a Float32 camera too
         cam32 = IdealCamera(1:64, 1:64, 0.125f0)
-        x = 33554433 // 33554432                       # 1 + 2^-25 µm
+        x = 1 + 2.0^-25
         save_smite(AnyCountSMLD([_anyloc(x=x)], cam32, 1, 1, Dict{String,Any}()), dir, "exact.mat")
         @test matread(joinpath(dir, "exact.mat"))["SMD"]["X"] === 8.500000238418579
-        @test load_smite_2d(SmiteSMD(dir, "exact.mat")).emitters[1].x === Float64(x)
+        @test load_smite_2d(SmiteSMD(dir, "exact.mat")).emitters[1].x === x
         # A finite position whose pixel coordinate a single cannot hold is an ArgumentError
         e32 = Emitter2DFit{Float32}(floatmax(Float32), 1.0f0, 1000.0f0, 10.0f0, 0.01f0, 0.01f0, 50.0f0, 2.0f0)
-        @test_throws r"x of emitter 1 is .*a MATLAB single in SMITE's pixels cannot hold" save_smite(
+        @test_throws r"x of emitter 1 is .*not finite in SMITE's pixels as a MATLAB single" save_smite(
             SMLMCore.BasicSMLD([e32], IdealCamera(1:64, 1:64, 0.25f0), 1, 1), dir, "over.mat")
         @test !isfile(joinpath(dir, "over.mat"))
-        # A finite value the loaders would read back as infinite, or an uncertainty that would
-        # read back as 0, is an ArgumentError too
-        cam3 = IdealCamera(1:64, 1:64, 3.0)
-        for (name, es, msg) in (("xmax.mat", [_anyloc(x=floatmax(Float64))], "x of emitter 1 is"),
-                                ("sxmax.mat", [AnyNumLoc(1.0, 1.5, 1000.0, 10.0, floatmax(Float64), 0.01, 50.0, 2.0, 1, 1, 0, 1)],
-                                 "σ_x of emitter 1 is"))
-            @test_throws Regex(msg) save_smite(AnyCountSMLD(es, cam3, 1, 1, Dict{String,Any}()), dir, name)
-            @test !isfile(joinpath(dir, name))
-        end
-        tiny = Emitter2DFit{Float32}(1.0f0, 1.0f0, 1000.0f0, 10.0f0, nextfloat(0.0f0), 0.01f0, 50.0f0, 2.0f0)
-        @test_throws r"σ_x of emitter 1 is" save_smite(
-            SMLMCore.BasicSMLD([tiny], IdealCamera(1:64, 1:64, 2.0f0), 1, 1), dir, "tiny.mat")
-        # A camera origin that is not a double is subtracted exactly
-        big0 = BigFloat(2)^53 + 1
-        camb = IdealCamera(collect(big0 .+ (0:4)), collect(BigFloat(0):4))
-        @test_logs (:warn, r"first pixel edge is at") save_smite(
-            AnyCountSMLD([_anyloc(x=Float64(2)^53 + 2)], camb, 1, 1, Dict{String,Any}()), dir, "bigorigin.mat")
-        @test matread(joinpath(dir, "bigorigin.mat"))["SMD"]["X"] === 1.5
         # A camera whose edges are not those the loaders rebuild from the written pixel size is
-        # refused: equal edges, a Float32 camera whose stored spacing far from the origin is not
-        # its first pixel's, a Float16 camera (its edges round differently from the double written)
+        # refused: equal edges, and a Float32 camera whose stored spacing far from the origin is
+        # not its first pixel's
         for (name, cam) in (("flat.mat", IdealCamera(Float32[0, 1], Float32[2^24, 2^24])),
-                            ("far32.mat", IdealCamera(Float32[0, 0.1], Float32[10000, 10000.1])),
-                            ("f16.mat", IdealCamera(512, 1, Float16(0.1))))
+                            ("far32.mat", IdealCamera(Float32[0, 0.1], Float32[10000, 10000.1])))
             @test_throws r"not uniform and square" save_smite(SMLMCore.BasicSMLD([em], cam, 1, 1), dir, name)
             @test !isfile(joinpath(dir, name))
         end
-        # Edges are subtracted exactly: Float16 edges offset from a pixel boundary round onto
-        # another grid (refused), and an exact Int8 grid away from 0 does not overflow (saved)
-        p16 = Float16(0.125)
-        @test_throws r"not uniform and square" save_smite(SMLMCore.BasicSMLD([em],
-            IdealCamera(Float16[0, p16], Float16.(0:65) .* p16 .- Float16(0.003)), 1, 1), dir, "f16off.mat")
+        # Integer edges are whole numbers a double holds: a unit grid away from 0, of a small
+        # integer type, saves with its origin warned about
         int8 = IdealCamera(collect(Int8(-100):Int8(100)), Int8[0, 1])
         e8 = Emitter2DFit{Float64}(-50.0, 0.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
         @test_logs (:warn, r"first pixel edge is at") save_smite(SMLMCore.BasicSMLD([e8], int8, 1, 1), dir, "int8.mat")
         smd = matread(joinpath(dir, "int8.mat"))["SMD"]
         @test smd["XSize"] == 200 && smd["YSize"] == 1 && smd["PixelSize"] === 1.0 && smd["X"] === 50.5
-        # The exact differences do not depend on BigFloat's working precision: a Float64 camera
-        # away from 0 keeps its pitch, and a BigFloat origin its position, at 24 bits too
+        # A Float64 camera away from 0 keeps its pitch as one Float64 subtraction gives it
         cam64 = IdealCamera([10000.0, 10000.1], [10000.0, 10000.1])
-        setprecision(BigFloat, 24) do
-            @test_logs (:warn, r"first pixel edge") save_smite(SMLMCore.BasicSMLD([em], cam64, 1, 1), dir, "p24.mat")
-            @test_logs (:warn, r"first pixel edge") save_smite(
-                AnyCountSMLD([_anyloc(x=Float64(2)^53 + 2)], camb, 1, 1, Dict{String,Any}()), dir, "bigorigin24.mat")
-        end
-        @test matread(joinpath(dir, "p24.mat"))["SMD"]["PixelSize"] === 10000.1 - 10000.0
-        @test matread(joinpath(dir, "bigorigin24.mat"))["SMD"]["X"] === 1.5
-        # ... and leave BigFloat's working precision alone (Julia 1.10 shares it between threads)
-        setprecision(BigFloat, 100) do
-            save_smite(SMLMCore.BasicSMLD([em], cam64, 1, 1), dir, "p100.mat")
-            @test precision(BigFloat) == 100
-        end
-        @test SMLMio._exact_sub(BigFloat(2)^53 + 1, BigFloat(2)^53) === 1.0
-        @test SMLMio._exact_sub(Int8(100), Int8(-100)) === 200.0
-        @test SMLMio._exact_sub(-50.0, Int8(-100)) === 50.0 && SMLMio._exact_sub(-0.75f0, big"-1.5") === 0.75
-        @test SMLMio._exact_sub(big(2)^60 + 2^7 + 1, 0) === 2.0^60 + 2.0^8
-        # The exact difference is rounded once, whatever its operands' exponents: an emitter at 0.0
-        # on an integer camera, and a BigFloat difference that is not a double
-        cint = IdealCamera([-1, 0, 1], [0, 1])
-        e0 = Emitter2DFit{Float64}(0.0, 0.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
-        @test_logs (:warn, r"first pixel edge") save_smite(SMLMCore.BasicSMLD([e0], cint, 1, 1), dir, "int0.mat")
-        smd = matread(joinpath(dir, "int0.mat"))["SMD"]
-        @test smd["X"] === 1.5 && smd["PixelSize"] === 1.0
-        @test SMLMio._exact_sub(0.0, -1) === 1.0 && SMLMio._exact_sub(nextfloat(0.0), big(0)) === nextfloat(0.0)
-        @test SMLMio._exact_sub(BigFloat(1) + BigFloat(2)^-53, -BigFloat(2)^-1000) === nextfloat(1.0)
-        # Rational edges are subtracted before rounding, whatever BigFloat's working precision (Julia
-        # converts a Rational{BigInt} through BigFloat): a camera 1/10 by 199/2000 µm is not square,
-        # and one of 1/10 by 1/10 µm at 10000 µm has pitch 0.1 and an emitter at 10000.0625 at X 1.125
-        q0 = big(10000) // 1
-        qx = [q0, q0 + big(1) // 10]
-        setprecision(BigFloat, 24) do
-            @test_throws r"not uniform and square" save_smite(
-                SMLMCore.BasicSMLD([em], IdealCamera(qx, [q0, q0 + big(199) // 2000]), 1, 1), dir, "qnonsq.mat")
-            eq = Emitter2DFit{Float64}(10000.0625, 10000.05, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
-            @test_logs (:warn, r"first pixel edge") save_smite(
-                SMLMCore.BasicSMLD([eq], IdealCamera(qx, qx), 1, 1), dir, "qsq.mat")
-            # a rational a double holds exactly is written, and a rational pitch rounds once
-            @test SMLMio._exact_double(big(4294967297) // 4294967296)
-            @test SMLMio._exact_sub(1 + big(1) // big(2)^53 + big(1) // big(2)^600, 0) === nextfloat(1.0)
-        end
-        smd = matread(joinpath(dir, "qsq.mat"))["SMD"]
-        @test smd["PixelSize"] === 0.1 && smd["X"] === 1.125
-        # Rounding to nearest, ties to even, subnormal and overflowing results included
-        r64 = SMLMio._round_float64
-        @test r64(big(1), big(3)) === 1 / 3 && r64(big(-2)^53 - 1, big(1)) === -2.0^53
-        @test r64(big(2)^53 + 3, big(1)) === 2.0^53 + 4 && r64(big(3), big(2)^1076) === nextfloat(0.0)
-        @test r64(big(1), big(2)^1075) === 0.0 && r64(big(2)^1024, big(1)) === Inf
-        @test_throws r"pixel edges are not all finite" save_smite(
-            SMLMCore.BasicSMLD([em], IdealCamera([0.0, Inf], [0.0, 1.0]), 1, 1), dir, "infedge.mat")
+        @test_logs (:warn, r"first pixel edge") save_smite(SMLMCore.BasicSMLD([em], cam64, 1, 1), dir, "p64.mat")
+        @test matread(joinpath(dir, "p64.mat"))["SMD"]["PixelSize"] === 10000.1 - 10000.0
         # A large Float32 camera at 0 is rebuilt exactly, and saves
         save_smite(SMLMCore.BasicSMLD([em], IdealCamera(4096, 4096, 0.1f0), 1, 1), dir, "big32.mat")
         @test load_smite_2d(SmiteSMD(dir, "big32.mat")).camera.pixel_edges_x == IdealCamera(4096, 4096, 0.1f0).pixel_edges_x
-        # Values with a zero imaginary part are their real part, as 0.1.0 saved them
-        save_smite(AnyCountSMLD([_anyloc(photons=4.0 + 0.0im)], IdealCamera(1:64, 1:64, 0.1), 1, 1,
-                                Dict{String,Any}()), dir, "c0.mat")
-        @test load_smite_2d(SmiteSMD(dir, "c0.mat")).emitters[1].photons === 4.0
     end
 end
 
@@ -925,24 +859,28 @@ end
     e2 = Emitter2DFit{Float64}(1.0, 1.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0)
     e3 = Emitter3DFit{Float64}(1.0, 1.5, 0.75, 1000.0, 10.0, 0.01, 0.01, 0.125, 50.0, 2.0)
     mktempdir() do dir
-        # Complex z is written as a complex column, as 0.1.0 did; load_smite_3d drops that row
-        save_smite(sm([_oddz(0.25 + 1.0im, 0.02), _oddz(0.5 + 0.0im, 0.02)]), dir, "cz.mat")
+        # The emitters' z must be single or double: a complex z is refused (the emitter types
+        # hold real values; SMITE's complex fits reach a save only as metadata, below)
+        @test_throws r"z of emitter 1 is 0.25 \+ 1.0im, a ComplexF64" save_smite(
+            sm([_oddz(0.25 + 1.0im, 0.02), _oddz(0.5, 0.02)]), dir, "zo.mat")
+        for zs in (Any[0.5, missing], Any[0.5, big"0.1"])
+            @test_throws r"save_smite: z of emitter 2 is" save_smite(sm([_oddz(z, 0.02) for z in zs]), dir, "zo.mat")
+            @test_throws r"save_smite: σ_z of emitter 2 is" save_smite(sm([_oddz(0.5, z) for z in zs]), dir, "zo.mat")
+        end
+        @test !isfile(joinpath(dir, "zo.mat"))
+        # Metadata Z and Z_SE on 2D emitters may hold complex values, as a 2D load of a SMITE 3D
+        # file keeps them: written as complex double, and load_smite_3d drops that row
+        save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => [0.25 + 1.0im, 0.5 + 0.0im], "Z_SE" => [0.1, 0.2])),
+                   dir, "cz.mat")
         smd = matread(joinpath(dir, "cz.mat"))["SMD"]
         @test smd["NDims"] == 3 && smd["Z"] isa AbstractArray{ComplexF64}
         back = @test_logs (:warn, r"non-zero imaginary") load_smite_3d(SmiteSMD(dir, "cz.mat"))
         @test [e.z for e in back.emitters] == [0.5]
-        # A number a double would round is an error wherever it is in the column, also after a
-        # value that is not a number (which alone saves without Z)
-        for zs in ([missing, big"0.1"], [big"0.1", missing])
-            @test_throws r"z of emitter \d is 0.1" save_smite(sm([_oddz(z, 0.02) for z in zs]), dir, "zo.mat")
-            @test_throws r"σ_z of emitter \d is 0.1" save_smite(sm([_oddz(0.5, z) for z in zs]), dir, "zo.mat")
-        end
-        @test !isfile(joinpath(dir, "zo.mat"))
         # Metadata Z and Z_SE never stand in for emitters whose own Z was not saved
         md() = Dict{String,Any}("Z" => [10.0, 20.0], "Z_SE" => [0.1, 0.1])
         @test_logs (:warn, r"mixed 2D/3D") save_smite(sm(A[e2, e3]; md=md()), dir, "mixz.mat")
-        @test_logs (:warn, r"3D emitters") save_smite(sm([_oddz(missing, 0.02), _oddz(missing, 0.02)]; md=md()),
-                                                     dir, "missz.mat")
+        fz = ForeignZNoSigmaZ{Float64}(1.0, 1.5, 0.5, 1000.0, 10.0, 0.01, 0.01, 50.0, 2.0, 1, 1, 0, 1)
+        @test_logs (:warn, r"3D emitters without σ_z") save_smite(sm([fz, fz]; md=md()), dir, "missz.mat")
         for f in ("mixz.mat", "missz.mat")
             smd = matread(joinpath(dir, f))["SMD"]
             @test !haskey(smd, "Z") && !haskey(smd, "Z_SE") && smd["NDims"] == 2
@@ -966,12 +904,12 @@ end
             @test a["NDims"] == 3 && b["NDims"] == 3
             @test vec(a["Z"]) == vec(b["Z"]) == [0.25, 0.5]
         end
-        # (the first save drops them with a warning, so the saved file has none to drop again)
-        a, b = @test_logs (:warn, r"Z, Z_SE not saved") twice(
-            "mdzbad.mat", Dict{String,Any}("Z" => Any["bad", 2.0], "Z_SE" => [0.1, 0.2]))
-        @test !haskey(a, "Z") && !haskey(b, "Z") && a["NDims"] == b["NDims"] == 2
-        @test_throws r"Z of metadata row 1 is 9007199254740993" save_smite(
+        # A metadata Z or Z_SE value that is not single or double is an error naming it
+        @test_throws r"metadata Z of value 1 is \"bad\".*remove it from the metadata" save_smite(
+            sm([e2, e2]; md=Dict{String,Any}("Z" => Any["bad", 2.0], "Z_SE" => [0.1, 0.2])), dir, "mdzbad.mat")
+        @test_throws r"metadata Z of value 1 is 9007199254740993, a Int64" save_smite(
             sm([e2, e2]; md=Dict{String,Any}("Z" => Int64[2^53 + 1, 1], "Z_SE" => [0.1, 0.2])), dir, "mdzbig.mat")
+        @test !isfile(joinpath(dir, "mdzbad.mat")) && !isfile(joinpath(dir, "mdzbig.mat"))
         # Data not loaded by SMLMio carry no record of which localization each metadata value
         # belongs to (ids are not that: a join, a filter or frame connection keeps or reuses them),
         # so values with one per emitter are written in the order given, as 0.1.0 wrote them, with
@@ -998,7 +936,7 @@ end
                                     dir, "tup.mat")
         smd = matread(joinpath(dir, "tup.mat"))["SMD"]
         @test smd["NDims"] == 3 && vec(smd["Z"]) == [0.25, 0.5]
-        @test_throws r"Z of metadata row 1 is 9007199254740993" save_smite(
+        @test_throws r"metadata Z of value 1 is 9007199254740993" save_smite(
             sm([e2, e2]; md=Dict{String,Any}("Z" => (Int64(2)^53 + 1, 1), "Z_SE" => [0.1, 0.2])), dir, "tupbig.mat")
         # Metadata Z of another length is ordinary metadata, written as given; the file stays 2D
         save_smite(sm([e2, e2]; md=Dict{String,Any}("Z" => [1.0, 2.0, 3.0])), dir, "mdz3rows.mat")

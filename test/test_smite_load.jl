@@ -295,13 +295,13 @@ quiet(f) = Base.CoreLogging.with_logger(f, Base.CoreLogging.NullLogger())
             saved = matread(joinpath(dir, "zsec-saved.mat"))["SMD"]
             @test saved["NDims"] == 3 && saved["Z_SE"] isa AbstractArray{ComplexF64}
             @test [e.id for e in quiet(() -> load_smite_3d(SmiteSMD(dir, "zsec-saved.mat"))).emitters] == [1, 3]
-            # Z or Z_SE holding a value that is not a number are not saved, with a warning; 2D
+            # Z or Z_SE holding a value that is not a single or double is an error naming the
+            # field and the file row, and nothing is written
             s3 = smite_smd_3d(2); s3["Z"] = Any[0.5, "bad"]
             smld = quiet(() -> load_smite_2d(write_smd(dir, "zbad.mat", s3)))
-            @test_logs (:warn, r"Z, Z_SE not saved: they hold values that are not numbers") save_smite(
+            @test_throws r"metadata Z of file row 2 is \"bad\".*remove it from the metadata" save_smite(
                 smld, dir, "zbad-saved.mat")
-            saved = matread(joinpath(dir, "zbad-saved.mat"))["SMD"]
-            @test !haskey(saved, "Z") && !haskey(saved, "Z_SE") && saved["NDims"] == 2
+            @test !isfile(joinpath(dir, "zbad-saved.mat"))
             # SMITE writes NDims 2 for its 3D fits too (FindROI sets it; the fit adds Z and Z_SE):
             # the file's populated Z makes a save 3D, with or without localizations
             s3 = smite_smd_3d(2); s3["NDims"] = 2.0

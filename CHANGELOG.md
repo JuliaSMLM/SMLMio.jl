@@ -2,6 +2,18 @@
 
 ## 0.1.1 (unreleased)
 
+Changed:
+
+- `save_smite` saves the values SMITE files and the lab's packages hold, and refuses anything
+  else with one `ArgumentError` naming the field, the emitter (or file row), the value and its
+  type, before anything is written. Emitter values (`x`, `y`, `z`, `photons`, `bg` and their
+  uncertainties) must be `Float32` or `Float64`; `frame`, `dataset`, `track_id`, `n_frames` and
+  `n_datasets` integers of at most 2^53 in size; camera edges `Float32` or `Float64` values or
+  such integers. Metadata `Z` and `Z_SE` written as coordinates may also hold complex singles
+  and doubles, as SMITE's fits give them. 0.1.0 wrote integer and complex emitter values (MAT
+  refused `Float16` and `BigFloat` ones), and saved 3D data whose `z` was not `Float32` or
+  `Float64` (`missing`, `Float16`) without `Z`, with a warning; each is now an error.
+
 Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 
 - Scalar fields were converted to `Float64` before they were checked. A complex `NFrames`,
@@ -24,9 +36,9 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 - `save_smite` wrote `n_frames`, `n_datasets` and each emitter's `frame`, `dataset` and
   `track_id` as doubles without checking them, so a value a double cannot hold exactly was saved
   rounded, and values the loaders refuse (a negative `n_frames`, a frame of 2.5) were written.
-  They now follow the loaders' rule: whole numbers in `Int`'s range that a double holds exactly,
-  with `n_frames` and `n_datasets` at least 0. Any other value is an `ArgumentError` naming it,
-  and nothing is written.
+  Each must now be an integer of at most 2^53 in size, which a double holds exactly, with
+  `n_frames` and `n_datasets` at least 0. Any other value, a whole `Float64` or a rational
+  included, is an `ArgumentError` naming it, and nothing is written.
 - The loaders refused a per-localization field stored as a MATLAB cell of numbers (MAT reads it
   as an array of `Any`), which SMLMData 0.7.1 loaded: "Photons is not numeric". Such a field
   now loads as a numeric column, each value checked and converted as stored, so an integer
@@ -40,27 +52,18 @@ Fixed in 0.1.0's SMITE I/O; each fix has a test that fails without it:
 - `save_smite` of emitters of `Float32` and `Float64` together (a `Union` element type) wrote
   `Photons`, `Bg`, their errors and `Z`, `Z_SE` as MATLAB cells, which MAT makes of a vector of
   mixed types, so `load_smite_3d` refused its own file; a 3D file with such cells, loaded in 2D
-  and saved, kept its cell `Z`. Every emitter column is now converted by its values: all
-  `Float32` stays single, real values are written as double when a double holds every value
-  exactly (integers, `Float16`; a complex value with a zero imaginary part is its real part),
-  complex values as complex double (as 0.1.0 wrote them; the loaders screen them), and a value
-  that is not a number or a number a double would round is an `ArgumentError` naming the field
-  and the emitter (for `z` and `σ_z` that are not numbers, such as `missing`, the file is saved
-  without `Z`, with a warning, as before, and so is the metadata's). Positions in SMITE's pixels are
-  computed in `Float64` from the written pixel size, where a `Float32` camera rounded them, and
-  each finite one must load back finite (a non-zero uncertainty also not as 0); `save_smite`
-  refuses a camera whose edges are not, within a thousandth of a pixel, those its loaders rebuild
-  from the written pixel size, edges (integer, rational or `BigFloat` ones too) subtracted
-  exactly and each difference rounded once, whatever BigFloat's working precision, without
-  changing it
-  (the check rounded in the camera's own
-  type, so a `Float32` camera far from the origin or a `Float16` one passed and loaded back with
-  other edges, and an integer grid could overflow), or that they
+  and saved, kept its cell `Z`. A column of all `Float32` is now written as single and any
+  other as double. Positions in SMITE's pixels are computed in `Float64` from the written pixel
+  size, where a `Float32` camera rounded them, and each finite one must be finite in pixels;
+  `save_smite` refuses a camera whose edges are not, within a thousandth of a pixel, those its
+  loaders rebuild from the written pixel size (the check rounded in the camera's own type, so a
+  `Float32` camera far from the origin passed and loaded back with other edges), or that they
   could not build back (no pixels along an axis, a pixel size that is not finite as written,
-  `Float32` edges that round onto each other). 3D
-  data whose `z` mixes `Float32` and `Float64`, or is `Float16`, save their `Z` instead of
+  `Float32` edges that round onto each other). 3D data whose `z` mixes `Float32` and `Float64`
+  save their `Z` instead of
   dropping it. `Z` and `Z_SE` kept in the metadata by `load_smite_2d` are written the same way
-  for 2D emitters, as are metadata `Z` and `Z_SE` with one value per emitter on data not loaded
+  for 2D emitters (complex values too, as SMITE's fits give them, written as complex double), as
+  are metadata `Z` and `Z_SE` with one value per emitter on data not loaded
   by SMLMio (built by hand, or loaded by SMLMData 0.7.1), in the order given, as 0.1.0 wrote
   them, so a save and a save of its load agree. Such data carry no record of which localization
   each value belongs to, so `save_smite` now warns, naming every SMITE per-localization field it
